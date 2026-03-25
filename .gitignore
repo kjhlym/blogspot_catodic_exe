@@ -43,3 +43,10 @@ gemini_image.jpg
 gemini_image.png
 gemini_fail_debug.html
 playwright-profile-gemini-vibe/
+playwright-profile-blogger/
+output/
+*.p.pen
+.env
+.env.local
+.env.production
+.env.development
