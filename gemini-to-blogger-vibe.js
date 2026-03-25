@@ -50,6 +50,19 @@ async function waitForGeminiResponse(page, timeoutMs = 120000) {
     try {
       status = await page.evaluate(() => {
         const text = document.body.innerText || '';
+        
+        // "지금 답변하기" 또는 "Answer now" 버튼이 있으면 클릭 시도
+        const buttons = Array.from(document.querySelectorAll('button, [role="button"], .action-button'));
+        const answerNowBtn = buttons.find(b => {
+          const t = (b.innerText || '').trim();
+          return t.includes('지금 답변하기') || t.includes('Answer now') || t.includes('지금 응답하기');
+        });
+        
+        if (answerNowBtn && answerNowBtn.offsetParent !== null) {
+          answerNowBtn.click();
+          return { isWorking: true, answerNowClicked: true };
+        }
+
         const lastTurn =
           document.querySelector('message-turn:last-of-type') ||
           document.querySelector('model-response:last-of-type') ||
@@ -59,18 +72,24 @@ async function waitForGeminiResponse(page, timeoutMs = 120000) {
 
         const lastText = (lastTurn?.textContent || lastTurn?.innerText || '').trim();
         const hasJsonCandidate =
-          /```(?:json)?/i.test(lastText) ||
-          /"title"\s*:/.test(lastText) ||
-          /"html"\s*:/.test(lastText);
+          (/```(?:json)?/i.test(lastText) && lastText.includes('}')) ||
+          (/"title"\s*:/.test(lastText) && lastText.includes('"html"\s*:') && lastText.includes('}'));
 
         const isWorking =
           document.querySelectorAll('mat-progress-spinner, [aria-label*="로딩"], .loading-indicator, generate-image-progress, .prediction-streaming').length > 0 ||
           text.includes('생성 중...') ||
           text.includes('생성하는 중') ||
-          text.includes('이미지 생성 중');
+          text.includes('이미지 생성 중') ||
+          document.querySelector('.prediction-streaming') !== null;
 
-        return { hasJsonCandidate, hasResponseText: lastText.length > 40, isWorking };
+        return { hasJsonCandidate, hasResponseText: lastText.length > 100, isWorking };
       });
+      
+      if (status.answerNowClicked) {
+        console.log("[GEMINI] '지금 답변하기' 버튼을 발견하여 클릭했습니다.");
+        await page.waitForTimeout(3000);
+        continue;
+      }
     } catch (err) {
       if (isCdpDisconnectedError(err)) {
         console.error('[GEMINI] CDP 연결 단절 감지 - 브라우저가 예기치 않게 종료되었습니다.');
@@ -312,7 +331,25 @@ async function ensureGeminiLoggedIn(page, shouldThrow = true) {
 async function interactWithGemini(context, topic) {
   const page = await context.newPage();
   console.log('[GEMINI] 새 페이지 생성 완료. gemini.google.com 접속 중...');
-  await page.goto('https://gemini.google.com/app?hl=ko', { waitUntil: 'domcontentloaded', timeout: 60000 });
+  
+  // 네트워크 지연에 대비하여 재시도 로직 및 타임아웃 강화
+  const maxRetries = 2;
+  let success = false;
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      await page.goto('https://gemini.google.com/app?hl=ko', { 
+        waitUntil: 'domcontentloaded', 
+        timeout: 120000 // 120초로 확장
+      });
+      success = true;
+      break;
+    } catch (err) {
+      console.warn(`[GEMINI] 접속 시도 ${i + 1} 실패: ${err.message}`);
+      if (i === maxRetries - 1) throw err;
+      await page.waitForTimeout(5000 * (i + 1));
+    }
+  }
+  
   console.log('[GEMINI] 페이지 로드 완료. 대기 중...');
   await page.waitForTimeout(4000);
 
@@ -341,7 +378,7 @@ async function interactWithGemini(context, topic) {
 
   if (!inputEl) throw new Error("Gemini 입력창을 찾을 수 없습니다. UI 구성을 확인하세요.");
 
-    const prompt = `[검색 키워드 및 확인된 원본 소재]\n${topic}\n\n[목표]\n당신은 글로벌 전기방식(Cathodic Protection) 기술 및 검색엔진(SEO) 최적화 전문가입니다. \n구글 SEO 랭킹 1위를 달성할 수 있도록, 기계 번역투나 AI 특유의 딱딱한 문장을 철저히 배제하고 '현업 엔지니어가 직접 자신의 경험과 지식을 녹여서 쓴 듯한 자연스럽고 깊이 있는 문장'으로 블로그 포스팅을 작성하세요.\n\n[작성 가이드라인]\n1. **SEO 및 분량 최적화**: 구글 검색 노출에 최적화되도록 핵심 키워드를 자연스럽게 전진 배치하며, 전문가의 통찰이 담긴 충분한 정보량(공백 포함 2000자 이상)으로 아주 상세하게 풍성한 내용을 작성하세요.\n2. **페르소나 및 어조**: 10년 차 이상 수석 엔지니어가 노하우를 공유하듯, 확신에 차 있으면서도 가독성이 높은 자연스러운 어투를 사용하여 '진짜 사람이 쓴 글'처럼 다듬어주세요.\n3. **구조**: <h2>, <h3> 태그를 적극 사용하여 H 태그 계층구조를 체계적으로 구성하여 SEO 점수와 가독성을 높이세요.\n4. **원본 이미지 최우선 활용**: 검색된 원본 웹페이지에 설명 이미지가 있을 경우, 그 URL을 찾아 본문 적절한 위치에 \`<img src="URL" alt="[핵심 키워드가 포함된 이미지 설명]" style="max-width:100%; height:auto;" />\` 태그로 직접 삽입하세요.\n5. **AI 이미지 플레이스홀더 삽입**: 원본에서 유효한 이미지를 발견하지 못한 경우, 본론의 시각적 환기가 필요한 곳에 \`[MID_IMAGE]\` 플레이스홀더를 정확히 삽입하세요.\n6. **원본 소스 링크 제외**: 본문 하단 등에 원본 출처를 암시하는 어떠한 링크나 출처 표기도 추가하지 마세요.\n7. **전문적 수식 작성**: 수학적 수식이나 물리 공식(예: Nernst 식, 전위차 계산 등)은 반드시 LaTeX 형식을 사용하여 전문적으로 작성하세요. 블로그 렌더링을 위해 \`$$수식$$\` (블록 스타일) 또는 \`$수식$\` (인라인 스타일) 형식을 엄격히 준수하세요.\n\n[출력 형식]\n오직 아래의 JSON 포맷만 포함하는 코드 블록(\`\`\`json ... \`\`\`)을 출력하세요.\n- 'thumbnail_title': 핵심 키워드 중심의 클릭을 유도하는 짧은 문구 (띄어쓰기 포함 15자 내외)\n- 'mid_image_keyword': 이미지를 가져오지 못해 [MID_IMAGE]를 삽입한 경우 실사 이미지 생성용 영문 프롬프트. 자체 이미지 URL 삽입 시 빈 문자열("") 입력.\n\n\`\`\`json\n{\n  "title": "클릭을 유도하는 전문적이고 매력적인 SEO 최적화 제목",\n  "thumbnail_title": "CP 기술 리포트",\n  "mid_image_keyword": "A high-quality realistic photo of industrial cathodic protection system on oil pipeline, professional engineering vibe",\n  "html": "<h2>기술 분석 요약</h2><p>실제 현장에서 우리가 겪는 부식 문제는 생각보다...</p>[MID_IMAGE]<h3>현업 적용 가이드</h3><p>이론뿐만 아니라 실무적인 관점에서는...</p>"\n}\n\`\`\`\n\n지금 바로 JSON을 분석하고 생성해 주세요.`;
+    const prompt = `[검색 키워드 및 확인된 원본 소재]\n${topic}\n\n[목표]\n당신은 글로벌 전기방식(Cathodic Protection) 기술 및 검색엔진(SEO) 최적화 전문가입니다. \n구글 SEO 랭킹 1위를 달성할 수 있도록, 기계 번역투나 AI 특유의 딱딱한 문장을 철저히 배제하고 '현업 엔지니어가 직접 자신의 경험과 지식을 녹여서 쓴 듯한 자연스럽고 깊이 있는 문장'으로 블로그 포스팅을 작성하세요.\n\n[작성 가이드라인]\n1. **SEO 및 분량 최적화**: 구글 검색 노출에 최적화되도록 핵심 키워드를 자연스럽게 전진 배치하며, 전문가의 통찰이 담긴 충분한 정보량(공백 포함 2000자 이상)으로 아주 상세하게 풍성한 내용을 작성하세요.\n2. **페르소나 및 어조**: 10년 차 이상 수석 엔지니어가 노하우를 공유하듯, 확신에 차 있으면서도 가독성이 높은 자연스러운 어투를 사용하여 '진짜 사람이 쓴 글'처럼 다듬어주세요.\n3. **구조**: <h2>, <h3> 태그를 적극 사용하여 H 태그 계층구조를 체계적으로 구성하여 SEO 점수와 가독성을 높이세요.\n4. **원본 이미지 최우선 활용**: 검색된 원본 웹페이지에 설명 이미지가 있을 경우, 그 URL을 찾아 본문 적절한 위치에 \`<img src="URL" alt="[핵심 키워드가 포함된 이미지 설명]" style="max-width:100%; height:auto;" />\` 태그로 직접 삽입하세요.\n5. **AI 이미지 플레이스홀더 삽입**: 원본에서 유효한 이미지를 발견하지 못한 경우, 본론의 시각적 환기가 필요한 곳에 \`[MID_IMAGE]\` 플레이스홀더를 정확히 삽입하세요.\n6. **원본 소스 링크 제외**: 본문 하단 등에 원본 출처를 암시하는 어떠한 링크나 출처 표기도 추가하지 마세요.\n7. **전문적 수식 작성**: 수학적 수식이나 물리 공식(예: Nernst 식, 전위차 계산 등)은 반드시 LaTeX 형식을 사용하여 전문적으로 작성하세요. 블로그 렌더링을 위해 \`$$수식$$\` (블록 스타일) 또는 \`$수식$\` (인라인 스타일) 형식을 엄격히 준수하세요.\n8. **태그 추출**: 포스팅 내용과 관련된 핵심 SEO 키워드 5~8개를 추출하여 'labels' 배열에 포함하세요.\n\n[출력 형식]\n오직 아래의 JSON 포맷만 포함하는 코드 블록(\`\`\`json ... \`\`\`)을 출력하세요.\n- 'thumbnail_title': 핵심 키워드 중심의 클릭을 유도하는 짧은 문구 (띄어쓰기 포함 15자 내외)\n- 'mid_image_keyword': 이미지를 가져오지 못해 [MID_IMAGE]를 삽입한 경우 실사 이미지 생성용 영문 프롬프트. 자체 이미지 URL 삽입 시 빈 문자열("") 입력.\n- 'labels': SEO 태그 문자열 배열 (예: ["전기방식", "부식방지", "해양플랜트"])\n\n\`\`\`json\n{\n  "title": "클릭을 유도하는 전문적이고 매력적인 SEO 최적화 제목",\n  "thumbnail_title": "CP 기술 리포트",\n  "mid_image_keyword": "A high-quality realistic photo of industrial cathodic protection system on oil pipeline, professional engineering vibe",\n  "labels": ["태그1", "태그2", "태그3"],\n  "html": "<h2>기술 분석 요약</h2><p>실제 현장에서 우리가 겪는 부식 문제는 생각보다...</p>[MID_IMAGE]<h3>현업 적용 가이드</h3><p>이론뿐만 아니라 실무적인 관점에서는...</p>"\n}\n\`\`\`\n\n지금 바로 JSON을 분석하고 생성해 주세요.`;
 
   await inputEl.click();
   await page.evaluate((text) => navigator.clipboard.writeText(text), prompt).catch(() => {});
@@ -361,21 +398,33 @@ async function interactWithGemini(context, topic) {
     const selectors = [
       'message-turn:last-of-type',
       'model-response:last-of-type',
-      '.model-response',
+      '.model-response:last-child',
       '[role="log"] div:last-child',
-      '.conversation-container .turn:last-child'
+      '.conversation-container .turn:last-child',
+      '.markdown:last-child'
     ];
     
     let lastTurn = null;
     for (const s of selectors) {
-      lastTurn = document.querySelector(s);
-      if (lastTurn && (lastTurn.textContent || lastTurn.innerText).trim().length > 0) break;
+      const elements = document.querySelectorAll(s);
+      if (elements.length > 0) {
+        lastTurn = elements[elements.length - 1];
+        if ((lastTurn.textContent || lastTurn.innerText).trim().length > 10) break;
+      }
     }
 
-    if (!lastTurn) return { text: "", codes: [] };
+    // 만약 위 셀렉터로 못 찾으면 모든 대화 턴 중 마지막 것을 찾음
+    if (!lastTurn) {
+        const allMessages = document.querySelectorAll('message-turn, .model-response, .markdown');
+        if (allMessages.length > 0) {
+            lastTurn = allMessages[allMessages.length - 1];
+        }
+    }
+
+    if (!lastTurn) return { text: document.body.innerText, codes: [] };
 
     const text = lastTurn.textContent || lastTurn.innerText || "";
-    const codeBlocks = Array.from(lastTurn.querySelectorAll('pre, code, .code-block, [role="textbox"]'))
+    const codeBlocks = Array.from(lastTurn.querySelectorAll('pre, code, .code-block, .code-block-wrapper, [role="textbox"]'))
       .map(el => el.textContent || el.innerText || "");
     
     return { text, codes: codeBlocks };
@@ -386,7 +435,8 @@ async function interactWithGemini(context, topic) {
   let jsonStr = "";
   for (const block of result.codes) {
     let cleanBlock = block.trim();
-    cleanBlock = cleanBlock.replace(/^(JSON|json)\s*/i, '').trim();
+    // 마크다운 백틱 제거가 이미 되어 있을 수 있으므로 정규식으로 한번 더 정제
+    cleanBlock = cleanBlock.replace(/^```(?:json)?\s*/i, '').replace(/```$/i, '').trim();
     
     if (cleanBlock.includes('"title"') && cleanBlock.includes('"html"')) {
       jsonStr = cleanBlock;
@@ -395,9 +445,11 @@ async function interactWithGemini(context, topic) {
   }
 
   if (!jsonStr) {
-    const jsonContextMatch = result.text.match(/\{[\s\S]*?"title"[\s\S]*?"html"[\s\S]*?\}/);
+    // 텍스트 전체에서 가장 긴 JSON 형태의 블록을 찾음 (JSON 코드 블록이 아닌 텍스트에 포함된 경우 대비)
+    const jsonContextMatch = result.text.match(/\{[\s\S]*?"title"[\s\S]*?"html"[\s\S]*?\}/g);
     if (jsonContextMatch) {
-        jsonStr = jsonContextMatch[0].trim();
+        // 가장 긴 매칭 결과 선택
+        jsonStr = jsonContextMatch.sort((a, b) => b.length - a.length)[0].trim();
     } else {
         const anyJsonMatch = result.text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
         if (anyJsonMatch) jsonStr = anyJsonMatch[1].trim();
@@ -405,17 +457,18 @@ async function interactWithGemini(context, topic) {
   }
 
   if (!jsonStr) {
-    console.log("[GEMINI] AI 답변에서 JSON을 추출하지 못했습니다.");
+    console.log("[GEMINI] AI 답변에서 JSON을 추출하지 못했습니다. (텍스트 일부: " + result.text.substring(0, 500) + "...)");
     await screenshot(page, 'json_extraction_fail');
     const html = await page.content();
     fs.writeFileSync('gemini_fail_debug.html', html);
     throw new Error("JSON 추출 실패");
   }
 
+
   function robustJsonParse(str) {
     let cleaned = str.trim();
-    // 1. Markdown 코드 블록 기호 제거
-    cleaned = cleaned.replace(/^```(?:json)?/i, '').replace(/```$/i, '').trim();
+    // 1. Markdown 코드 블록 기호 및 "JSON" 접두어 제거 (간혹 Gemini가 응답 서두에 "JSON" 문구를 포함함)
+    cleaned = cleaned.replace(/^JSON\s*/i, '').replace(/^```(?:json)?/i, '').replace(/```$/i, '').trim();
     
     try {
       return JSON.parse(cleaned);
@@ -426,10 +479,7 @@ async function interactWithGemini(context, topic) {
       cleaned = cleaned.replace(/[\x00-\x1F\x7F-\x9F]/g, "");
       
       // 3. 따옴표 내부의 유효하지 않은 백슬래시 처리 (특히 LaTeX \frac 등)
-      // 따옴표로 감싸진 문자열 내부를 찾아 백슬래시를 이스케이프합니다.
       cleaned = cleaned.replace(/"([^"\\]*(?:\\.[^"\\]*)*)"/gs, (match, p1) => {
-        // 이미 이스케이프된 것들을 제외한 나머지 단일 백슬래시를 찾아 이중으로 만듭니다.
-        // 하지만 JSON에서 허용되는 이스케이프(\", \\, \/, \b, \f, \n, \r, \t, \uXXXX)는 보존해야 합니다.
         const fixed = p1.replace(/\\(?![/"\\bfnrtu])/g, "\\\\");
         return `"${fixed}"`;
       });
@@ -672,12 +722,16 @@ async function interactWithGemini(context, topic) {
 
     let published;
     console.log(`\n[Worker] Blogger 에디터 워커 실행 시도 (이미지: ${hasImage ? '있음' : '없음'})...`);
+    const finalLabels = Array.isArray(content.labels) && content.labels.length > 0 
+      ? [...new Set([...content.labels, target.category])]
+      : [target.category];
+
     published = await runBloggerEditorWorker({
       blogId: resolvedBlogId,
       title: content.title,
       htmlContent: content.html,
       imagePath: hasImage ? GEMINI_IMAGE_PATH : null,
-      labels: [target.category]
+      labels: finalLabels
     });
     console.log(`[Worker] 발행 완료 - postId: ${published?.postId || 'unknown'} / url: ${published?.url || 'unknown'}`);
 

@@ -173,52 +173,52 @@ async function findVisibleBodyTextarea(page) {
     const meta = await ta.evaluate((node) => {
       const rect = node.getBoundingClientRect();
       const style = window.getComputedStyle(node);
+      const isSidebar = !!node.closest('.vBy66d');
+      const isMain = !!node.closest('.vExY8e');
       return {
         visible: rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none",
         width: rect.width,
         height: rect.height,
         left: rect.left,
+        top: rect.top,
+        id: node.id || "",
         ariaLabel: node.getAttribute("aria-label") || "",
-        placeholder: node.getAttribute("placeholder") || ""
+        placeholder: node.getAttribute("placeholder") || "",
+        isSidebar,
+        isMain
       };
     }).catch(() => null);
 
-    if (!meta?.visible) {
+    if (!meta?.visible || meta.isSidebar) {
+      if (meta?.isSidebar) console.log(`[Worker] Textarea(${i}) is in SIDEBAR, skipping.`);
       continue;
     }
 
-    const area = meta.width * meta.height;
     const labelHint = `${meta.ariaLabel} ${meta.placeholder}`.toLowerCase();
     
-    // 메인 에디터 판단: HTML 편집 모드일 때 보통 "HTML"이라는 단어가 라벨에 포함되거나, 크기가 매우 크고 왼쪽/중앙에 위치함.
-    const isMainEditorHint = labelHint.includes("html") || labelHint.includes("편집") || labelHint.includes("editor");
+    // 기하학적 기준: 본문 에디터는 너비가 최소 600px 이상이어야 하며, 화면 중앙/좌측에 위치해야 함.
+    const isMainGeometry = meta.width > 600 && meta.left < 450;
     
-    // 사이드바 판단: 너비가 좁거나(라벨 창), 우측에 치우쳐 있거나, "라벨/label/쉼표" 단어가 포함된 경우
-    const looksSidebarField =
-      /쉼표|라벨|label|tags|태그/.test(labelHint) || meta.left > 800 || meta.width < 500 || meta.height < 150;
+    console.log(`[Worker] Textarea(${i}): "${meta.ariaLabel}", ${meta.width}x${meta.height} at (${meta.left},${meta.top}), Main=${meta.isMain}, Geom=${isMainGeometry}`);
 
-    console.log(`[Worker] Textarea 점검: label="${meta.ariaLabel}", placeholder="${meta.placeholder}", pos=(${meta.left},${meta.width}x${meta.height}), isMainHint=${isMainEditorHint}, looksSidebar=${looksSidebarField}`);
-
-    // 만약 메인 에디터 힌트가 있고 사이드바가 아니라면 즉시 반환
-    if (isMainEditorHint && !looksSidebarField) {
-      console.log(`[Worker] ✅ 메인 본문 에디터를 발견했습니다 (Hint 기반).`);
+    // 명확한 본문 에디터로 판단되는 경우 (컨테이너 클래스가 있거나 기하학적으로 완벽함)
+    if (meta.isMain || isMainGeometry) {
+      console.log(`[Worker] ✅ 메인 본문 에디터 확정: ${meta.width}x${meta.height}`);
       return ta;
     }
 
-    if (area > fallbackArea) {
+    const area = meta.width * meta.height;
+    if (area > fallbackArea && meta.width > 500) {
       fallbackArea = area;
       fallback = ta;
     }
-
-    if (!looksSidebarField && area > 50000) { // 최소 면적 기준 추가 (큰 영역인 경우)
-      return ta;
-    }
   }
 
-  if (fallback) {
-    console.log(`[Worker] ⚠️ 명확한 에디터를 찾지 못해 가장 큰 영역을 선택합니다.`);
+  if (fallback && fallbackArea > 100000) { // 본문 에디터는 보통 20만px 이상
+     console.log(`[Worker] ⚠️ 폴백으로 큰 에디터 선택: ${fallbackArea}px`);
+     return fallback;
   }
-  return fallback;
+  return null;
 }
 
 async function waitVisibleBodyTextarea(page, timeoutMs = 30000) {
@@ -334,60 +334,69 @@ async function waitForPendingBase64Upload(page, timeoutMs = 60000) {
 }
 
 async function switchEditorMode(page, targetMode) {
+  console.log(`[Worker] 에디터 모드 전환 시도: -> ${targetMode}`);
+  
+  // 1. 현재 상태 실측
+  // HTML 모드라면 본문에 대형 textarea가 있어야 함. (findVisibleBodyTextarea가 사이드바 제외하고 찾아줌)
+  const mainTextarea = await findVisibleBodyTextarea(page);
+  const currentMode = mainTextarea ? 'html' : 'compose';
+  
+  if (currentMode === targetMode) {
+    console.log(`[Worker] 이미 ${targetMode} 모드입니다. (실측 결과)`);
+    return true;
+  }
+
+  console.log(`[Worker] 모드가 다릅니다. 전환을 시작합니다. (현재: ${currentMode}, 목표: ${targetMode})`);
+
   const toggleSelectors = [
-    'div[role="listbox"][aria-label="보기 전환"]',
-    'div[role="listbox"][aria-label="View"]',
-    'div[aria-label="글쓰기 보기"]',
-    'div[aria-label="Compose view"]',
-    'div[aria-label="보기 전환"]',
-    'div[aria-label="View"]',
-    'div.MWQFLe.uLX2p'
+    'div[role="listbox"][aria-label*="보기"]',
+    'div[role="listbox"][aria-label*="View"]',
+    'div.MWQFLe.uLX2p',
+    'button[aria-label*="보기"]',
+    'div[aria-label="입력 모드 수정"]'
   ];
 
   const htmlMenuSelectors = [
-    'div[role="option"]:has-text("HTML 보기")',
-    'div[role="option"]:has-text("HTML view")',
+    'div[role="option"]:has-text("HTML")',
     'div[role="menuitem"]:has-text("HTML")',
-    'span.vRMGwf.oJeWuf:has-text("HTML 보기")',
+    'span:has-text("HTML 보기")',
     'span:has-text("HTML view")'
   ];
 
   const composeMenuSelectors = [
-    'div[role="option"]:has-text("새 글 작성 보기")',
-    'div[role="option"]:has-text("Compose view")',
-    'div[role="menuitem"]:has-text("작성")',
-    'div[role="menuitem"]:has-text("Compose")',
-    'span.vRMGwf.oJeWuf:has-text("작성")',
+    'div[role="option"]:has-text("작성")',
+    'div[role="option"]:has-text("Compose")',
+    'span:has-text("새 글 작성 보기")',
     'span:has-text("Compose view")'
   ];
 
   for (const sel of toggleSelectors) {
-    const toggles = page.locator(sel);
-    const count = await toggles.count().catch(() => 0);
-    for (let i = 0; i < count; i++) {
-      const toggle = toggles.nth(i);
-      if (await toggle.isVisible({ timeout: 700 }).catch(() => false)) {
-        await toggle.click({ force: true });
-        await page.waitForTimeout(900);
-        const ok = await clickFirstVisible(
-          page,
-          targetMode === "html" ? htmlMenuSelectors : composeMenuSelectors,
-          1000
-        );
-        if (ok) {
-          await page.waitForTimeout(1500);
-          if (targetMode === "html") {
-             // 텍스트 영역을 찾을 때까지 대기
-             const textarea = await waitVisibleBodyTextarea(page, 15000);
-             return Boolean(textarea);
-          }
+    const toggle = page.locator(sel).first();
+    if (await toggle.isVisible({ timeout: 2000 }).catch(() => false)) {
+      await toggle.click({ force: true });
+      await page.waitForTimeout(1000);
+      
+      const targetMenuSelectors = targetMode === "html" ? htmlMenuSelectors : composeMenuSelectors;
+      const ok = await clickFirstVisible(page, targetMenuSelectors, 2000);
+
+      if (ok) {
+        console.log(`[Worker] 모드 선택 메뉴 클릭 성공: ${targetMode}`);
+        await page.waitForTimeout(3000); // 렌더링 시간 충분히 확보
+        
+        // 검증
+        const finalCheckTextarea = await findVisibleBodyTextarea(page);
+        const finalMode = finalCheckTextarea ? 'html' : 'compose';
+        if (finalMode === targetMode) {
+          console.log(`[Worker] ✅ 모드 전환 성공: ${targetMode}`);
           return true;
         }
+        console.error(`[Worker] ⚠️ 모드 전환 메뉴는 눌렀으나 실측 결과가 일치하지 않음. (실제: ${finalMode})`);
       }
     }
   }
   return false;
 }
+
 
 async function ensureLoggedIn(page, { email, password, targetUrl }) {
   console.log("[Worker] 로그인 상태 확인...");
@@ -478,38 +487,66 @@ async function setHtmlContent(page, htmlContent) {
 async function setLabels(page, labels) {
   if (!labels || labels.length === 0) return;
   const labelsText = labels.join(", ");
-  const labelsSelectors = [
-    'textarea[aria-label="라벨"]',
-    'textarea[aria-label="Labels"]',
-    'textarea[placeholder*="라벨"]',
-    'textarea[placeholder*="Labels"]',
-    'input[aria-label*="라벨"]',
-    'input[aria-label*="Labels"]',
+  
+  // 1. 라벨 섹션 확장 시도
+  const expandSelectors = [
+    'div[role="button"]:has-text("라벨")',
+    'div[role="button"]:has-text("Labels")',
+    'button:has-text("라벨")',
+    'button:has-text("Labels")',
+    'span:has-text("라벨")',
+    '.O9v6xe:has-text("라벨")'
   ];
 
-  // 사이드바 설정 영역이 닫혀있을 수 있으므로 "설정" 버튼 클릭 시도 (필요한 경우)
-  const settingsToggle = page.locator('div[role="button"][aria-label="설정"], div[role="button"][aria-label="Settings"]').first();
-  if (await settingsToggle.isVisible({ timeout: 1000 }).catch(() => false)) {
-    // 이미 열려있는지 확인하는 로직이 복잡할 수 있으므로 안전하게 클릭 시도
-    // (Blogger UI 특성상 열려있을 때 누르면 닫히므로 주의가 필요하지만, 보통 라벨 textarea가 안 보이면 닫힌 것)
-  }
+  const findInput = async () => {
+    const selectors = [
+      'textarea[aria-label="라벨"]',
+      'textarea[aria-label="Labels"]',
+      'textarea[placeholder*="라벨"]',
+      'textarea[placeholder*="Labels"]',
+      'input[aria-label*="라벨"]',
+      'input[aria-label*="Labels"]',
+    ];
+    for (const sel of selectors) {
+      const el = page.locator(sel).first();
+      if (await el.isVisible({ timeout: 1000 }).catch(() => false)) return el;
+    }
+    return null;
+  };
 
-  let labelsInput = null;
-  for (const sel of labelsSelectors) {
-    const el = page.locator(sel).first();
-    if (await el.isVisible({ timeout: 2000 }).catch(() => false)) {
-      labelsInput = el;
-      break;
+  let labelsInput = await findInput();
+  
+  if (!labelsInput) {
+    console.log("[Worker] 라벨 섹션이 닫혀 있는 것 같습니다. 확장 시도...");
+    for (const sel of expandSelectors) {
+      const btn = page.locator(sel).first();
+      if (await btn.isVisible().catch(() => false)) {
+        await btn.click({ force: true });
+        await page.waitForTimeout(1500);
+        labelsInput = await findInput();
+        if (labelsInput) {
+          console.log(`[Worker] ✅ 라벨 섹션 확장 성공 (셀렉터: ${sel})`);
+          break;
+        }
+      }
     }
   }
 
   if (labelsInput) {
     await labelsInput.click({ force: true });
-    await labelsInput.fill(labelsText);
+    // 기존 내용 삭제 후 새 라벨 입력
+    await labelsInput.fill("");
+    await labelsInput.type(labelsText + ", ", { delay: 20 });
     await page.keyboard.press("Enter");
+    await labelsInput.evaluate(node => {
+      node.dispatchEvent(new Event("input", { bubbles: true }));
+      node.dispatchEvent(new Event("change", { bubbles: true }));
+      node.dispatchEvent(new Event("blur", { bubbles: true }));
+    });
     console.log(`[Worker] 라벨 입력 완료: ${labelsText}`);
+    await page.waitForTimeout(1500);
   } else {
-    console.log("[Worker] ⚠️ 라벨 입력창을 찾을 수 없습니다.");
+    console.log("[Worker] ⚠️ 라벨 입력창을 완전히 찾을 수 없습니다.");
   }
 }
 
@@ -552,7 +589,7 @@ async function runBloggerEditorWorker(data) {
       console.log("[Worker] HTML 보기 모드 전환 시도...");
       const swOk = await switchEditorMode(page, "html");
       if (!swOk) {
-        console.warn("[Worker] ⚠️ 'HTML 보기' 전환 실패 가능성. 현재 화면 기반으로 진행 중...");
+        throw new Error("[Worker] ❌ 'HTML 보기' 전환 실패. 본문 입력 시도 중단 (레이블 오입력 방지용 보호 작동)");
       }
       
       await setHtmlContent(page, finalHtml);

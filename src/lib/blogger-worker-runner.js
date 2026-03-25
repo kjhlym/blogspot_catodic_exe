@@ -107,6 +107,7 @@ async function runBloggerEditorWorker({
       title,
       htmlContent,
       imagePath,
+      labels,
       postId,
       publish
     }),
