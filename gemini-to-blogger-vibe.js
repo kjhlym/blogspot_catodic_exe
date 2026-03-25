@@ -378,7 +378,7 @@ async function interactWithGemini(context, topic) {
 
   if (!inputEl) throw new Error("Gemini 입력창을 찾을 수 없습니다. UI 구성을 확인하세요.");
 
-    const prompt = `[검색 키워드 및 확인된 원본 소재]\n${topic}\n\n[목표]\n당신은 글로벌 전기방식(Cathodic Protection) 기술 및 검색엔진(SEO) 최적화 전문가입니다. \n구글 SEO 랭킹 1위를 달성할 수 있도록, 기계 번역투나 AI 특유의 딱딱한 문장을 철저히 배제하고 '현업 엔지니어가 직접 자신의 경험과 지식을 녹여서 쓴 듯한 자연스럽고 깊이 있는 문장'으로 블로그 포스팅을 작성하세요.\n\n[작성 가이드라인]\n1. **SEO 및 분량 최적화**: 구글 검색 노출에 최적화되도록 핵심 키워드를 자연스럽게 전진 배치하며, 전문가의 통찰이 담긴 충분한 정보량(공백 포함 2000자 이상)으로 아주 상세하게 풍성한 내용을 작성하세요.\n2. **페르소나 및 어조**: 10년 차 이상 수석 엔지니어가 노하우를 공유하듯, 확신에 차 있으면서도 가독성이 높은 자연스러운 어투를 사용하여 '진짜 사람이 쓴 글'처럼 다듬어주세요.\n3. **구조**: <h2>, <h3> 태그를 적극 사용하여 H 태그 계층구조를 체계적으로 구성하여 SEO 점수와 가독성을 높이세요.\n4. **원본 이미지 최우선 활용**: 검색된 원본 웹페이지에 설명 이미지가 있을 경우, 그 URL을 찾아 본문 적절한 위치에 \`<img src="URL" alt="[핵심 키워드가 포함된 이미지 설명]" style="max-width:100%; height:auto;" />\` 태그로 직접 삽입하세요.\n5. **AI 이미지 플레이스홀더 삽입**: 원본에서 유효한 이미지를 발견하지 못한 경우, 본론의 시각적 환기가 필요한 곳에 \`[MID_IMAGE]\` 플레이스홀더를 정확히 삽입하세요.\n6. **원본 소스 링크 제외**: 본문 하단 등에 원본 출처를 암시하는 어떠한 링크나 출처 표기도 추가하지 마세요.\n7. **전문적 수식 작성**: 수학적 수식이나 물리 공식(예: Nernst 식, 전위차 계산 등)은 반드시 LaTeX 형식을 사용하여 전문적으로 작성하세요. 블로그 렌더링을 위해 \`$$수식$$\` (블록 스타일) 또는 \`$수식$\` (인라인 스타일) 형식을 엄격히 준수하세요.\n8. **태그 추출**: 포스팅 내용과 관련된 핵심 SEO 키워드 5~8개를 추출하여 'labels' 배열에 포함하세요.\n\n[출력 형식]\n오직 아래의 JSON 포맷만 포함하는 코드 블록(\`\`\`json ... \`\`\`)을 출력하세요.\n- 'thumbnail_title': 핵심 키워드 중심의 클릭을 유도하는 짧은 문구 (띄어쓰기 포함 15자 내외)\n- 'mid_image_keyword': 이미지를 가져오지 못해 [MID_IMAGE]를 삽입한 경우 실사 이미지 생성용 영문 프롬프트. 자체 이미지 URL 삽입 시 빈 문자열("") 입력.\n- 'labels': SEO 태그 문자열 배열 (예: ["전기방식", "부식방지", "해양플랜트"])\n\n\`\`\`json\n{\n  "title": "클릭을 유도하는 전문적이고 매력적인 SEO 최적화 제목",\n  "thumbnail_title": "CP 기술 리포트",\n  "mid_image_keyword": "A high-quality realistic photo of industrial cathodic protection system on oil pipeline, professional engineering vibe",\n  "labels": ["태그1", "태그2", "태그3"],\n  "html": "<h2>기술 분석 요약</h2><p>실제 현장에서 우리가 겪는 부식 문제는 생각보다...</p>[MID_IMAGE]<h3>현업 적용 가이드</h3><p>이론뿐만 아니라 실무적인 관점에서는...</p>"\n}\n\`\`\`\n\n지금 바로 JSON을 분석하고 생성해 주세요.`;
+    const prompt = `[검색 키워드 및 확인된 원본 소재]\n${topic}\n\n[목표]\n당신은 글로벌 전기방식(Cathodic Protection) 기술 및 검색엔진(SEO) 최적화 전문가입니다. \n구글 SEO 랭킹 1위를 달성할 수 있도록, 기계 번역투나 AI 특유의 딱딱한 문장을 철저히 배제하고 '현업 엔지니어가 직접 자신의 경험과 지식을 녹여서 쓴 듯한 자연스럽고 깊이 있는 문장'으로 블로그 포스팅을 작성하세요.\n\n[작성 가이드라인]\n1. **SEO 및 분량 최적화**: 구글 검색 노출에 최적화되도록 핵심 키워드를 자연스럽게 전진 배치하며, 전문가의 통찰이 담긴 충분한 정보량(공백 포함 2000자 이상)으로 아주 상세하게 풍성한 내용을 작성하세요.\n2. **페르소나 및 어조**: 10년 차 이상 수석 엔지니어가 노하우를 공유하듯, 확신에 차 있으면서도 가독성이 높은 자연스러운 어투를 사용하여 '진짜 사람이 쓴 글'처럼 다듬어주세요.\n3. **구조**: <h2>, <h3> 태그를 적극 사용하여 H 태그 계층구조를 체계적으로 구성하여 SEO 점수와 가독성을 높이세요.\n4. **원본 이미지 최우선 활용**: 검색된 원본 웹페이지에 설명 이미지가 있을 경우, 그 URL을 찾아 본문 적절한 위치에 \`<img src="URL" alt="[핵심 키워드가 포함된 이미지 설명]" style="max-width:100%; height:auto;" />\` 태그로 직접 삽입하세요.\n5. **AI 이미지 플레이스홀더 삽입**: 원본에서 유효한 이미지를 발견하지 못한 경우, 본론의 시각적 환기가 필요한 곳에 \`[MID_IMAGE]\` 플레이스홀더를 정확히 삽입하세요.\n6. **원본 소스 링크 제외**: 본문 하단 등에 원본 출처를 암시하는 어떠한 링크나 출처 표기도 추가하지 마세요.\n7. **전문적 수식 작성**: 수학적 수식이나 물리 공식(예: Nernst 식, 전위차 계산 등)은 반드시 LaTeX 형식을 사용하여 전문적으로 작성하세요. 블로그 렌더링을 위해 \`$$수식$$\` (블록 스타일) 또는 \`\\(수식\\)\` (인라인 스타일) 형식을 엄격히 준수하세요.\n   - **LaTeX 수식 보호**: JSON 출력 시 백슬래시(\\)가 유실되지 않도록 반드시 이중 백슬래시(\\\\)를 사용하세요 (예: \\\\frac, \\\\rho, \\\\sigma 등).\n   - **인라인 수식 예시**: \\\\(\\\\frac{1}{2}\\\\)\n   - **블록 수식 예시**: \`$$\\\\frac{-b \\\\pm \\\\sqrt{b^2-4ac}}{2a}$$\` \n8. **태그 추출**: 포스팅 내용과 관련된 핵심 SEO 키워드 5~8개를 추출하여 'labels' 배열에 포함하세요.\n\n[출력 형식]\n오직 아래의 JSON 포맷만 포함하는 코드 블록(\`\`\`json ... \`\`\`)\을 출력하세요. 어떤 부연 설명도 하지 마세요.\n- 'thumbnail_title': 핵심 키워드 중심의 클릭을 유도하는 짧은 문구 (띄어쓰기 포함 15자 내외)\n- 'mid_image_keyword': 이미지를 가져오지 못해 [MID_IMAGE]를 삽입한 경우 실사 이미지 생성용 영문 프롬프트. 자체 이미지 URL 삽입 시 빈 문자열("") 입력.\n- 'labels': SEO 태그 문자열 배열 (예: ["전기방식", "부식방지", "해양플랜트"])\n\n\`\`\`json\n{\n  "title": "클릭을 유도하는 전문적이고 매력적인 SEO 최적화 제목",\n  "thumbnail_title": "CP 기술 리포트",\n  "mid_image_keyword": "A high-quality realistic photo of industrial cathodic protection system on oil pipeline, professional engineering vibe",\n  "labels": ["태그1", "태그2", "태그3"],\n  "html": "<h2>기술 분석 요약</h2><p>실제 현장에서 우리가 겪는 부식 문제는 생각보다...</p>[MID_IMAGE]<h3>현업 적용 가이드</h3><p>이론뿐만 아니라 실무적인 관점에서는...</p>"\n}\n\`\`\`\n\n지금 바로 JSON을 분석하고 생성해 주세요.`;
 
   await inputEl.click();
   await page.evaluate((text) => navigator.clipboard.writeText(text), prompt).catch(() => {});
@@ -467,20 +467,35 @@ async function interactWithGemini(context, topic) {
 
   function robustJsonParse(str) {
     let cleaned = str.trim();
-    // 1. Markdown 코드 블록 기호 및 "JSON" 접두어 제거 (간혹 Gemini가 응답 서두에 "JSON" 문구를 포함함)
+    // 1. Markdown 코드 블록 기호 및 "JSON" 접두어 제거
     cleaned = cleaned.replace(/^JSON\s*/i, '').replace(/^```(?:json)?/i, '').replace(/```$/i, '').trim();
     
     try {
       return JSON.parse(cleaned);
     } catch (e) {
-      console.log("[GEMINI] 표준 JSON 파싱 실패, 세척 시도...");
+      console.log("[GEMINI] 표준 JSON 파싱 실패, 세밀한 세정 시도...");
       
       // 2. 제어 문자 제거 (공백 제외)
       cleaned = cleaned.replace(/[\x00-\x1F\x7F-\x9F]/g, "");
       
-      // 3. 따옴표 내부의 유효하지 않은 백슬래시 처리 (특히 LaTeX \frac 등)
+      // 3. 따옴표 내부의 백슬래시 처리 (LaTeX 수식 보존 최우선)
+      // JSON 문자열 내부의 \는 \\로 표현되어야 합니다. Gemini가 \frac 이라고 보내면 에러가 나므로 \\frac으로 바꿔야 하지만,
+      // 이미 \\frac 인 것을 \\\frac으로 만들면 안 됩니다.
       cleaned = cleaned.replace(/"([^"\\]*(?:\\.[^"\\]*)*)"/gs, (match, p1) => {
-        const fixed = p1.replace(/\\(?![/"\\bfnrtu])/g, "\\\\");
+        // 이미 적절히 이스케이프된 시퀀스(\", \\, \n, \r, \t, \/ 등)를 보호하고
+        // 그 외의 단일 백슬래시만 찾아 이중으로 만듭니다.
+        let fixed = p1;
+        // 1단계: 기존의 유효한 이스케이프 보호 (토큰화)
+        fixed = fixed.replace(/\\\\/g, "__DOUBLE_BS__")
+                     .replace(/\\"/g, "__ESCAPED_QUOTE__");
+        
+        // 2단계: 남은 단일 백슬래시를 모두 이중화
+        fixed = fixed.replace(/\\/g, "\\\\");
+        
+        // 3단계: 토큰 복원 (JSON 파싱을 위해 \\ 로 복원)
+        fixed = fixed.replace(/__DOUBLE_BS__/g, "\\\\")
+                     .replace(/__ESCAPED_QUOTE__/g, "\\\"");
+        
         return `"${fixed}"`;
       });
 
@@ -491,6 +506,8 @@ async function interactWithGemini(context, topic) {
         return JSON.parse(cleaned);
       } catch (e2) {
         console.error("[GEMINI] JSON 최종 파싱 실패:", e2.message);
+        // 디버깅을 위해 실패한 문자열 저장
+        fs.writeFileSync('json_fail_dump.txt', cleaned);
         throw e2;
       }
     }

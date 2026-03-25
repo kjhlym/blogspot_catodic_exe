@@ -96,23 +96,36 @@ function buildInlineImageHtml(imagePath) {
 }
 
 function wrapWithMathJax(html) {
-  const mathJaxHeader = `
+  // 블로그 에디터(blogger.com)  // 3. MathJax 스크립트 전처리 (Blogger 에디터에서 실행 방지)
+  // LaTeX 구분자(\(, \))가 브라우저 JS 엔진에서 오인되지 않도록 이중 이스케이프 적용
+  const mathJaxConfig = `
 <script>
-window.MathJax = {
-  tex: {
-    inlineMath: [['$', '$'], ['\\\\(', '\\\\)']],
-    displayMath: [['$$', '$$'], ['\\\\[', '\\\\]']]
-  },
-  options: {
-    skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code']
-  }
-};
+(function() {
+  // Blogger 에디터 내에서는 실행하지 않음
+  if (window.location.hostname.indexOf('blogger.com') !== -1) return;
+
+  window.MathJax = {
+    tex: {
+      inlineMath: [['$', '$'], ['\\\\(', '\\\\)']],
+      displayMath: [['$$', '$$'], ['\\\\[', '\\\\]']]
+    },
+    options: {
+      skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code']
+    },
+    startup: {
+      ready: () => {
+        console.log('MathJax is ready, initializing...');
+        MathJax.startup.defaultReady();
+      }
+    }
+  };
+})();
 </script>
-<script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+<script async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
 `;
   const content = String(html || "");
   if (content.includes("MathJax-script")) return content;
-  return (mathJaxHeader.trim() + "\n" + content).trim();
+  return (mathJaxConfig.trim() + "\n" + content).trim();
 }
 
 function buildContentWithMidImage(htmlContent, imagePath) {
@@ -500,10 +513,13 @@ async function setLabels(page, labels) {
 
   const findInput = async () => {
     const selectors = [
+      'textarea[jsname="YPqjbf"]',
+      'textarea[aria-label*="라벨을 구분하세요"]',
       'textarea[aria-label="라벨"]',
       'textarea[aria-label="Labels"]',
       'textarea[placeholder*="라벨"]',
       'textarea[placeholder*="Labels"]',
+      'textarea.KHxj8b',
       'input[aria-label*="라벨"]',
       'input[aria-label*="Labels"]',
     ];
@@ -536,8 +552,13 @@ async function setLabels(page, labels) {
     await labelsInput.click({ force: true });
     // 기존 내용 삭제 후 새 라벨 입력
     await labelsInput.fill("");
-    await labelsInput.type(labelsText + ", ", { delay: 20 });
+    await labelsInput.type(labelsText, { delay: 30 });
     await page.keyboard.press("Enter");
+    await page.waitForTimeout(500);
+    await page.keyboard.press("Comma"); // 쉼표를 입력하면 보통 확정됨
+    await page.waitForTimeout(500);
+    await page.keyboard.press("Enter");
+    
     await labelsInput.evaluate(node => {
       node.dispatchEvent(new Event("input", { bubbles: true }));
       node.dispatchEvent(new Event("change", { bubbles: true }));
@@ -561,6 +582,17 @@ async function commitPost(page, { blogId, title, isExistingPost }) {
 async function runBloggerEditorWorker(data) {
   const { email, password, blogId, title, htmlContent, imagePath, postId, publish = true, onLog = console.log } = data;
   const finalHtml = buildContentWithMidImage(htmlContent, imagePath);
+  
+  // 디버깅: 최종 HTML 저장
+  try {
+    const debugPath = path.join(process.cwd(), "output", "playwright", `final_post_${Date.now()}.html`);
+    fs.mkdirSync(path.dirname(debugPath), { recursive: true });
+    fs.writeFileSync(debugPath, finalHtml, "utf-8");
+    console.log(`[Worker] Debug: Final HTML saved to ${debugPath}`);
+  } catch (e) {
+    console.warn("[Worker] Debug: Failed to save final HTML", e.message);
+  }
+
   const artifactDir = ensureArtifactDir();
   const userDataDir = path.join(process.cwd(), "playwright-profile-blogger");
   const context = await chromium.launchPersistentContext(userDataDir, {
