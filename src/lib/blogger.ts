@@ -43,7 +43,7 @@ export class BloggerBot {
     const userDataDir = path.join(process.cwd(), 'playwright-profile-blogger');
     
     this.context = await chromium.launchPersistentContext(userDataDir, {
-      headless: false, // 사용자 요청에 따라 헤드리스 해제
+      headless: false,
       viewport: { width: 1280, height: 900 },
       args: ['--disable-blink-features=AutomationControlled'],
     });
@@ -60,16 +60,19 @@ export class BloggerBot {
       await page.goto(targetUrl, { waitUntil: 'networkidle' });
       await this.ensureLoggedIn(page, email, password, targetUrl);
       
-      const currentUrl = await this.openEditor(page, blogId, postId);
+      await this.openEditor(page, blogId, postId);
       await this.setTitle(page, title);
 
+      // 본문 구성 (이미지 삽입 + MathJax 래핑)
+      const finalHtml = this.buildFinalHtml(htmlContent, imagePath);
+
       await Notifier.logStep(jobId, 'HTML_MODE', 'HTML 보기 모드 전환 중...');
-      await this.switchEditorMode(page, 'html');
+      const swOk = await this.switchEditorMode(page, 'html');
+      if (!swOk) throw new Error("에디터 모드 전환 실패 (HTML)");
       
       await Notifier.logStep(jobId, 'CONTENT', '본문 주입 중...');
-      await this.setHtmlContent(page, htmlContent, imagePath);
+      await this.setHtmlContent(page, finalHtml);
 
-      // [핵심] 저장 대기 후 모드 전환
       await Notifier.logStep(jobId, 'SAVE', '변경사항 저장 대기 중...');
       await page.keyboard.press('Control+S');
       await this.waitForPendingBase64Upload(page, 20000);
@@ -79,8 +82,8 @@ export class BloggerBot {
       await page.waitForTimeout(2000);
 
       if (publish) {
-        await Notifier.logStep(jobId, 'LABEL', '레이블(태그) 입력 중...');
         if (data.labels && data.labels.length > 0) {
+          await Notifier.logStep(jobId, 'LABEL', '레이블(태그) 입력 중...');
           await this.setLabels(page, data.labels);
         }
 
@@ -94,12 +97,53 @@ export class BloggerBot {
       return { success: true, url: page.url() };
     } catch (error: any) {
       console.error(`[Worker Error] ${error.message}`);
-      await page.screenshot({ path: path.join(process.cwd(), 'output', 'playwright', `error-${jobId}.png`) });
+      const errorDir = path.join(process.cwd(), 'output', 'playwright');
+      if (!fs.existsSync(errorDir)) fs.mkdirSync(errorDir, { recursive: true });
+      await page.screenshot({ path: path.join(errorDir, `error-${jobId}.png`) });
       await Notifier.sendDiscord(`Blogger 포스팅 실패: **${title}**\n사유: ${error.message}`, true);
       throw error;
     } finally {
       await this.context.close();
     }
+  }
+
+  private buildFinalHtml(htmlContent: string, imagePath?: string): string {
+    let content = this.stripExistingInlineDataImages(htmlContent);
+    content = content.replace(/\[MID_IMAGE\]|\[MIDDLE_IMAGE\]/gi, "");
+
+    let imageHtml = "";
+    if (imagePath && fs.existsSync(imagePath)) {
+      const ext = path.extname(imagePath).toLowerCase();
+      const mime = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg';
+      const base64 = fs.readFileSync(imagePath).toString('base64');
+      imageHtml = `<div style="text-align:center; padding:20px 0;"><img src="data:${mime};base64,${base64}" alt="본문 이미지" style="width:100%; max-width:none; height:auto; display:block; margin:0 auto;" /></div>`;
+    }
+
+    const combined = imageHtml ? `${imageHtml}\n${content.trim()}` : content.trim();
+    return this.wrapWithMathJax(combined);
+  }
+
+  private stripExistingInlineDataImages(html: string): string {
+    return html
+      .replace(/<div[^>]*>\s*<img[^>]+src=["']data:image[^"']+["'][^>]*>\s*<\/div>/gi, "")
+      .replace(/<img[^>]+src=["']data:image[^"']+["'][^>]*>/gi, "");
+  }
+
+  private wrapWithMathJax(html: string): string {
+    if (html.includes("MathJax-script")) return html;
+    const config = `
+<script>
+(function() {
+  if (window.location.hostname.indexOf('blogger.com') !== -1) return;
+  window.MathJax = {
+    tex: { inlineMath: [['$', '$'], ['\\\\(', '\\\\)']], displayMath: [['$$', '$$'], ['\\\\[', '\\\\]']] },
+    options: { skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code'] }
+  };
+})();
+</script>
+<script async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    `;
+    return (config.trim() + "\n" + html).trim();
   }
 
   private async ensureLoggedIn(page: Page, email?: string, password?: string, targetUrl?: string) {
@@ -119,14 +163,12 @@ export class BloggerBot {
 
   private async openEditor(page: Page, blogId: string, postId?: string) {
     if (postId) return page.url();
-    
     await page.evaluate(() => {
       const btn = Array.from(document.querySelectorAll('div[role="button"], button')).find(el => 
         (el.textContent || '').includes('새 글') || (el.textContent || '').includes('New post')
       ) as HTMLElement;
       if (btn) btn.click();
     });
-
     await page.waitForURL(/\/post\/(edit|create)/i, { timeout: 15000 });
     await page.waitForTimeout(3000);
     return page.url();
@@ -139,123 +181,78 @@ export class BloggerBot {
   }
 
   private async switchEditorMode(page: Page, mode: 'html' | 'compose') {
-    const toggleSelectors = [
-      'div[role="listbox"][aria-label*="보기"]',
-      'div[aria-label*="View"]',
-      'div[aria-label*="보기 모드"]',
-      'button[aria-label*="보기"]'
-    ];
+    // 실측 기반 모드 판단
+    const mainTextarea = await this.findVisibleBodyTextarea(page);
+    const currentMode = mainTextarea ? 'html' : 'compose';
+    if (currentMode === mode) return true;
 
-    let toggle = null;
-    for (const sel of toggleSelectors) {
-      const el = page.locator(sel).first();
-      if (await el.isVisible({ timeout: 2000 }).catch(() => false)) {
-        toggle = el;
-        break;
-      }
-    }
-
-    if (!toggle) {
-      console.warn("[BloggerBot] 보기 전환 토글을 찾을 수 없습니다.");
-      return false;
-    }
+    const toggle = page.locator('div[role="listbox"][aria-label*="보기"], div[aria-label*="View"], button[aria-label*="보기"]').first();
+    if (!await toggle.isVisible({ timeout: 5000 }).catch(() => false)) return false;
 
     await toggle.click();
     await page.waitForTimeout(1000);
     
     const item = mode === 'html' 
       ? page.locator('div[role="option"]:has-text("HTML")') 
-      : page.locator('div[role="option"]:has-text("작성"), div[role="option"]:has-text("Compose"), div[role="option"]:has-text("새 글 작성"), span:has-text("새 글 작성")');
+      : page.locator('div[role="option"]:has-text("작성"), div[role="option"]:has-text("Compose"), span:has-text("새 글 작성")');
     
     if (await item.first().isVisible({ timeout: 5000 })) {
       await item.first().click();
-      await page.waitForTimeout(3000);
+      await page.waitForTimeout(4000);
       return true;
     }
     return false;
   }
 
-  private async waitForPendingBase64Upload(page: Page, timeoutMs = 60000) {
-    const startedAt = Date.now();
-    let pendingSeen = false;
-
-    console.log("[Worker] 저장 및 이미지 상태 모니터링 시작...");
-
-    while (Date.now() - startedAt < timeoutMs) {
-      const state = await page.evaluate(() => {
-        const text = document.body.innerText || "";
-        const isPending = text.includes("업로드 중") || text.includes("저장 중") || text.includes("Saving") || text.includes("Uploading");
-        
-        // 클라우드 저장 아이콘 상태 확인
-        const cloudIcon = document.querySelector('div[aria-label*="저장됨"], div[aria-label*="Saved"], div[aria-label*="모든 변경사항이 저장되었습니다"]');
-        const isSettled = !!cloudIcon;
-
-        return { isPending, isSettled };
+  private async findVisibleBodyTextarea(page: Page) {
+    const list = page.locator('textarea');
+    const count = await list.count().catch(() => 0);
+    for (let i = 0; i < count; i++) {
+      const ta = list.nth(i);
+      const meta = await ta.evaluate((el) => {
+        const rect = el.getBoundingClientRect();
+        const isSidebar = !!el.closest('.vBy66d');
+        const visible = rect.width > 500 && rect.height > 200;
+        return { visible, isSidebar };
       });
-
-      if (state.isPending) {
-        pendingSeen = true;
-        process.stdout.write(".");
-      } else {
-        // 한 번이라도 Pending을 봤거나, 이미 Settled 상태이면서 최소 3초 경과 시 종료
-        if (state.isSettled && (pendingSeen || (Date.now() - startedAt > 5000))) {
-          console.log("\n[Worker] ✅ 저장 및 업로드 완료 확인");
-          return true;
-        }
-      }
-      await page.waitForTimeout(1000);
+      if (meta.visible && !meta.isSidebar) return ta;
     }
-    console.warn("\n[Worker] ⚠️ 저장 완료 확인 타임아웃");
-    return false;
+    return null;
   }
 
-  private async setHtmlContent(page: Page, htmlContent: string, imagePath?: string) {
-    // [Vibe Logic] 본문 전용 textarea 찾기 (사이드바 .vBy66d 제외)
-    const findVisibleBodyTextarea = async () => {
-      const locators = page.locator('textarea');
-      const count = await locators.count();
-      for (let i = 0; i < count; i++) {
-        const node = locators.nth(i);
-        const meta = await node.evaluate((el) => {
-          const rect = el.getBoundingClientRect();
-          const visible = rect.width > 600 && rect.height > 200;
-          const isSidebar = !!el.closest('.vBy66d');
-          return { visible, isSidebar };
-        });
-
-        if (meta.visible && !meta.isSidebar) return node;
-      }
-      return null;
-    };
-
-    const textarea = await findVisibleBodyTextarea() || page.locator('textarea[dir="ltr"], .editable textarea').first();
-    await textarea.waitFor({ state: 'visible', timeout: 30000 });
+  private async setHtmlContent(page: Page, html: string) {
+    const textarea = await this.findVisibleBodyTextarea(page);
+    if (!textarea) throw new Error("본문 에디터(HTML)를 찾을 수 없습니다.");
     
     await textarea.click({ force: true });
-    await page.keyboard.press("Control+A");
-    await page.keyboard.press("Backspace");
-
-    let finalHtml = htmlContent;
-    if (imagePath && fs.existsSync(imagePath)) {
-      const base64 = fs.readFileSync(imagePath).toString('base64');
-      const ext = path.extname(imagePath).toLowerCase();
-      const mime = ext === '.png' ? 'image/png' : 'image/jpeg';
-      const imgHtml = `<div style="text-align:center"><img src="data:${mime};base64,${base64}" /></div>`;
-      finalHtml = imgHtml + htmlContent;
-    }
+    await page.keyboard.press('Control+A');
+    await page.keyboard.press('Backspace');
 
     await textarea.evaluate((el: any, content) => {
       el.value = content;
       el.dispatchEvent(new Event('input', { bubbles: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));
-      el.dispatchEvent(new Event('blur', { bubbles: true }));
-    }, finalHtml);
+    }, html);
     
-    await textarea.click({ force: true });
     await page.keyboard.press('End');
     await page.keyboard.insertText(' ');
     await page.keyboard.press('Backspace');
     await page.waitForTimeout(1000);
+  }
+
+  private async waitForPendingBase64Upload(page: Page, timeoutMs = 60000) {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < timeoutMs) {
+      const state = await page.evaluate(() => {
+        const text = document.body.innerText || "";
+        const isPending = text.includes("업로드 중") || text.includes("저장 중") || text.includes("Uploading") || text.includes("Saving");
+        const cloudIcon = document.querySelector('div[aria-label*="저장됨"], div[aria-label*="Saved"], div[aria-label*="모든 변경사항이 저장되었습니다"]');
+        return { isPending, isSettled: !!cloudIcon };
+      });
+      if (!state.isPending && state.isSettled) return true;
+      await page.waitForTimeout(1000);
+    }
+    return false;
   }
 
   private async commitPost(page: Page, blogId: string, title: string, isUpdate: boolean) {
@@ -263,7 +260,7 @@ export class BloggerBot {
     let clicked = false;
     for (const sel of selectors) {
       const btn = page.locator(sel).first();
-      if (await btn.isVisible({ timeout: 2000 }).catch(() => false)) {
+      if (await btn.isVisible({ timeout: 3000 }).catch(() => false)) {
         await btn.click();
         clicked = true;
         break;
@@ -272,40 +269,16 @@ export class BloggerBot {
     if (!clicked) throw new Error('게시/업데이트 버튼을 찾을 수 없습니다.');
     
     await page.waitForTimeout(2000);
-    await page.waitForTimeout(2000);
     const confirm = page.locator(CONFIRM_SELECTORS.join(', ')).first();
     if (await confirm.isVisible({ timeout: 5000 }).catch(() => false)) {
       await confirm.click();
-      await page.waitForTimeout(5000); // 게시 완료 후 안정화
+      await page.waitForTimeout(5000);
     }
-
-    // 전반적인 게시 완료 여부를 텍스트로 추가 검증
-    await page.waitForFunction(() => {
-      const text = document.body.innerText || "";
-      return text.includes("게시됨") || text.includes("Published") || text.includes("변경사항이 저장되었습니다");
-    }, { timeout: 15000 }).catch(() => {});
   }
 
   private async setLabels(page: Page, labels: string[]) {
-    if (!labels || labels.length === 0) return;
-    const labelsText = labels.join(", ");
-
-    const expandSelectors = [
-      'div[role="button"]:has-text("라벨")',
-      'div[role="button"]:has-text("Labels")',
-      'button:has-text("라벨")',
-      'button:has-text("Labels")',
-    ];
-
     const findInput = async () => {
-      const selectors = [
-        'textarea[jsname="YPqjbf"]',
-        'textarea[aria-label*="라벨을 구분하세요"]',
-        'textarea[aria-label="라벨"]',
-        'textarea[aria-label="Labels"]',
-        'textarea.KHxj8b',
-        'input[aria-label*="라벨"]',
-      ];
+      const selectors = ['textarea[jsname="YPqjbf"]', 'textarea[aria-label*="라벨"]', 'textarea[aria-label*="Labels"]', 'input[aria-label*="라벨"]'];
       for (const sel of selectors) {
         const el = page.locator(sel).first();
         if (await el.isVisible({ timeout: 1000 }).catch(() => false)) return el;
@@ -313,31 +286,20 @@ export class BloggerBot {
       return null;
     };
 
-    let labelsInput = await findInput();
-    if (!labelsInput) {
-      // 입력창이 안 보이면 사이드바의 '라벨' 섹션이 닫혀있을 수 있음 -> 클릭해서 확장
-      for (const sel of expandSelectors) {
-        const btn = page.locator(sel).first();
-        if (await btn.isVisible().catch(() => false)) {
-          await btn.click();
-          await page.waitForTimeout(1500);
-          labelsInput = await findInput();
-          if (labelsInput) break;
-        }
+    let input = await findInput();
+    if (!input) {
+      const expand = page.locator('div[role="button"]:has-text("라벨"), div[role="button"]:has-text("Labels"), button:has-text("라벨")').first();
+      if (await expand.isVisible({ timeout: 2000 })) {
+        await expand.click();
+        await page.waitForTimeout(1500);
+        input = await findInput();
       }
     }
 
-    if (labelsInput) {
-      // 레이블 입력 전 기존 내용 삭제 및 신규 입력
-      await labelsInput.scrollIntoViewIfNeeded();
-      await labelsInput.click({ force: true });
-      await labelsInput.fill("");
-      await labelsInput.type(labelsText + ", ", { delay: 20 });
+    if (input) {
+      await input.fill(labels.join(", ") + ", ");
       await page.keyboard.press("Enter");
       await page.waitForTimeout(1000);
-      console.log(`[BloggerBot] 라벨 입력 완료: ${labelsText}`);
-    } else {
-      console.warn("[BloggerBot] 라벨 입력창을 찾지 못해 입력을 건너뜁니다.");
     }
   }
 }
