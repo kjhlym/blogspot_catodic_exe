@@ -50,3 +50,4 @@ output/
 .env.local
 .env.production
 .env.development
+tmp/

@@ -12,6 +12,7 @@ export interface BloggerJobData {
   imagePath?: string;
   postId?: string;
   publish?: boolean;
+  labels?: string[];
 }
 
 const TITLE_SELECTORS = [
@@ -78,6 +79,11 @@ export class BloggerBot {
       await page.waitForTimeout(2000);
 
       if (publish) {
+        await Notifier.logStep(jobId, 'LABEL', '레이블(태그) 입력 중...');
+        if (data.labels && data.labels.length > 0) {
+          await this.setLabels(page, data.labels);
+        }
+
         await Notifier.logStep(jobId, 'PUBLISH', '게시/업데이트 버튼 클릭 중...');
         await this.commitPost(page, blogId, title, !!postId);
       }
@@ -133,14 +139,33 @@ export class BloggerBot {
   }
 
   private async switchEditorMode(page: Page, mode: 'html' | 'compose') {
-    const toggle = page.locator('div[role="listbox"][aria-label*="보기"], div[aria-label*="View"], div[aria-label*="보기 모드"]').first();
-    await toggle.waitFor({ state: 'visible', timeout: 10000 });
+    const toggleSelectors = [
+      'div[role="listbox"][aria-label*="보기"]',
+      'div[aria-label*="View"]',
+      'div[aria-label*="보기 모드"]',
+      'button[aria-label*="보기"]'
+    ];
+
+    let toggle = null;
+    for (const sel of toggleSelectors) {
+      const el = page.locator(sel).first();
+      if (await el.isVisible({ timeout: 2000 }).catch(() => false)) {
+        toggle = el;
+        break;
+      }
+    }
+
+    if (!toggle) {
+      console.warn("[BloggerBot] 보기 전환 토글을 찾을 수 없습니다.");
+      return false;
+    }
+
     await toggle.click();
     await page.waitForTimeout(1000);
     
     const item = mode === 'html' 
       ? page.locator('div[role="option"]:has-text("HTML")') 
-      : page.locator('div[role="option"]:has-text("작성"), div[role="option"]:has-text("Compose"), div[role="option"]:has-text("새 글 작성")');
+      : page.locator('div[role="option"]:has-text("작성"), div[role="option"]:has-text("Compose"), div[role="option"]:has-text("새 글 작성"), span:has-text("새 글 작성")');
     
     if (await item.first().isVisible({ timeout: 5000 })) {
       await item.first().click();
@@ -185,8 +210,25 @@ export class BloggerBot {
   }
 
   private async setHtmlContent(page: Page, htmlContent: string, imagePath?: string) {
-    // 본문 전용 textarea 찾기 (기존의 범용 textarea보다 정확함)
-    const textarea = page.locator('textarea[dir="ltr"], .editable textarea').first();
+    // [Vibe Logic] 본문 전용 textarea 찾기 (사이드바 .vBy66d 제외)
+    const findVisibleBodyTextarea = async () => {
+      const locators = page.locator('textarea');
+      const count = await locators.count();
+      for (let i = 0; i < count; i++) {
+        const node = locators.nth(i);
+        const meta = await node.evaluate((el) => {
+          const rect = el.getBoundingClientRect();
+          const visible = rect.width > 600 && rect.height > 200;
+          const isSidebar = !!el.closest('.vBy66d');
+          return { visible, isSidebar };
+        });
+
+        if (meta.visible && !meta.isSidebar) return node;
+      }
+      return null;
+    };
+
+    const textarea = await findVisibleBodyTextarea() || page.locator('textarea[dir="ltr"], .editable textarea').first();
     await textarea.waitFor({ state: 'visible', timeout: 30000 });
     
     await textarea.click({ force: true });
@@ -242,5 +284,60 @@ export class BloggerBot {
       const text = document.body.innerText || "";
       return text.includes("게시됨") || text.includes("Published") || text.includes("변경사항이 저장되었습니다");
     }, { timeout: 15000 }).catch(() => {});
+  }
+
+  private async setLabels(page: Page, labels: string[]) {
+    if (!labels || labels.length === 0) return;
+    const labelsText = labels.join(", ");
+
+    const expandSelectors = [
+      'div[role="button"]:has-text("라벨")',
+      'div[role="button"]:has-text("Labels")',
+      'button:has-text("라벨")',
+      'button:has-text("Labels")',
+    ];
+
+    const findInput = async () => {
+      const selectors = [
+        'textarea[jsname="YPqjbf"]',
+        'textarea[aria-label*="라벨을 구분하세요"]',
+        'textarea[aria-label="라벨"]',
+        'textarea[aria-label="Labels"]',
+        'textarea.KHxj8b',
+        'input[aria-label*="라벨"]',
+      ];
+      for (const sel of selectors) {
+        const el = page.locator(sel).first();
+        if (await el.isVisible({ timeout: 1000 }).catch(() => false)) return el;
+      }
+      return null;
+    };
+
+    let labelsInput = await findInput();
+    if (!labelsInput) {
+      // 입력창이 안 보이면 사이드바의 '라벨' 섹션이 닫혀있을 수 있음 -> 클릭해서 확장
+      for (const sel of expandSelectors) {
+        const btn = page.locator(sel).first();
+        if (await btn.isVisible().catch(() => false)) {
+          await btn.click();
+          await page.waitForTimeout(1500);
+          labelsInput = await findInput();
+          if (labelsInput) break;
+        }
+      }
+    }
+
+    if (labelsInput) {
+      // 레이블 입력 전 기존 내용 삭제 및 신규 입력
+      await labelsInput.scrollIntoViewIfNeeded();
+      await labelsInput.click({ force: true });
+      await labelsInput.fill("");
+      await labelsInput.type(labelsText + ", ", { delay: 20 });
+      await page.keyboard.press("Enter");
+      await page.waitForTimeout(1000);
+      console.log(`[BloggerBot] 라벨 입력 완료: ${labelsText}`);
+    } else {
+      console.warn("[BloggerBot] 라벨 입력창을 찾지 못해 입력을 건너뜁니다.");
+    }
   }
 }

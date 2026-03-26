@@ -24,8 +24,8 @@ export async function POST() {
             blogId: item.blogId || '8613426021178496417', // Default blog ID
             title: item.title,
             htmlContent: item.description || 'No description provided.',
-            tags: [item.category || 'General', 'RPA'],
-            isTest: !!group.group?.isTest
+            labels: [item.category || 'General', 'RPA'],
+            publish: true
           });
           addedCount++;
         }
