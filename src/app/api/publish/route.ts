@@ -4,6 +4,7 @@ import { spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import { addHistory } from '@/lib/history';
+import { setPublishStatus } from '@/lib/status';
 
 interface PublishItem {
   id: string;
@@ -95,14 +96,15 @@ async function startPublishingJob(items: PublishItem[], options: { headless?: bo
         child.on('close', (code) => {
           if (code === 0) {
             logManager.broadcast('log', `   ✅ 발행 성공: ${item.keyword}`);
-            // 히스토리에 기록하여 다음 큐레이션 시 제외되도록 함 (제목 포함)
             addHistory(item.link, item.title);
+            setPublishStatus(item.link, 'completed'); // 폴링이 스피너 중지 가능하도록 상태 저장
             successCount++;
             resolve();
           } else {
             logManager.broadcast('error', `   ❌ 발행 실패 (코드 ${code}): ${item.keyword}`);
+            setPublishStatus(item.link, 'failed'); // 실패 상태도 저장
             failCount++;
-            resolve(); // 다음 항목 진행을 위해 에러 발생 시에도 resolve
+            resolve();
           }
         });
 

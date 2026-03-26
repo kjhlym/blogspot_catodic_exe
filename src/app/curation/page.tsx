@@ -263,7 +263,7 @@ export default function CurationPage() {
     try {
       const res = await fetch('/api/history');
       if (res.ok) {
-        const data = await res.json();
+        const data = await readJsonSafely<HistoryItem[]>(res);
         setHistoryItems(data);
       }
     } catch (err) {
@@ -278,7 +278,7 @@ export default function CurationPage() {
     setIsSyncing(true);
     try {
       const res = await fetch('/api/history/sync', { method: 'POST' });
-      const data = await res.json();
+      const data = await readJsonSafely<{ success: boolean; message: string; error?: string }>(res);
       if (data.success) {
         await fetchHistory();
         alert(data.message);
@@ -311,7 +311,7 @@ export default function CurationPage() {
     try {
       // 실시간 서버 수집(Crawl) 요청
       const res = await fetch('/api/curation/refresh', { method: 'POST' });
-      const result = await res.json();
+      const result = await readJsonSafely<{ ok?: boolean; message?: string; error?: string }>(res);
       
       if (!res.ok) throw new Error(result.error || '수집 중 오류 발생');
 
@@ -520,7 +520,7 @@ export default function CurationPage() {
     if (!confirm('정말로 모든 진행 중인 작업을 중지하시겠습니까?')) return;
     try {
       const res = await fetch('/api/curation/stop', { method: 'POST' });
-      const data = await res.json();
+      const data = await readJsonSafely<{ error?: string }>(res);
       if (res.ok) {
         setPublishing(false);
         setFeaturedLoading(false);
@@ -531,6 +531,75 @@ export default function CurationPage() {
     } catch (err) {
       console.error('Stop Error:', err);
       alert('중지 요청 중 오류가 발생했습니다.');
+    }
+  };
+
+  const handleForceComplete = async () => {
+    const selectedItemsToForce: Array<FeaturedCurationItem & { presetGroupId: string }> = [];
+    const selectedGroupIds = new Set<string>();
+
+    for (const [groupId, payload] of Object.entries(featuredCacheRef.current)) {
+      for (const item of payload.items) {
+        if (item.selected && !item.publishStatus) {
+          selectedItemsToForce.push({ ...item, presetGroupId: groupId });
+          selectedGroupIds.add(groupId);
+        }
+      }
+    }
+
+    if (selectedItemsToForce.length === 0) {
+      alert('발행 완료 처리할 항목을 선택해주세요.');
+      return;
+    }
+
+    if (!confirm(`선택한 ${selectedItemsToForce.length}개 항목을 강제 발행 완료 처리하고 해당 카테고리를 비우시겠습니까?`)) {
+      return;
+    }
+
+    setPublishing(true);
+    setPublishResult(null);
+
+    try {
+      const res = await fetch('/api/curation/force-complete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          items: selectedItemsToForce.map((item) => ({
+            link: item.link,
+            title: item.title,
+            presetGroupId: item.presetGroupId,
+          })),
+        }),
+      });
+
+      if (!res.ok) {
+        const data = await readJsonSafely<{ error?: string }>(res);
+        throw new Error(data.error || '처리 중 오류 발생');
+      }
+
+      const result = await readJsonSafely<{ message: string }>(res);
+      
+      // 로컬 상태 업데이트
+      // 1. 히스토리 갱신
+      await fetchHistory();
+
+      // 2. 캐시 및 현재 아이템 갱신
+      for (const groupId of Array.from(selectedGroupIds)) {
+        if (featuredCacheRef.current[groupId]) {
+          featuredCacheRef.current[groupId].items = [];
+        }
+      }
+      
+      if (activePresetGroupId && selectedGroupIds.has(activePresetGroupId)) {
+        setFeaturedItems([]);
+      }
+
+      setPublishResult(result.message);
+      alert(result.message);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : '강제 완료 처리 중 오류 발생');
+    } finally {
+      setPublishing(false);
     }
   };
 
@@ -642,7 +711,7 @@ export default function CurationPage() {
                 </div>
               </div>
 
-              <div className='flex items-center gap-3 w-full lg:w-auto'>
+              <div className='flex items-center gap-3 w-full lg:w-auto mt-4 lg:mt-0'>
                 {(publishing || featuredLoading) && (
                   <button
                     onClick={() => void handleStop()}
@@ -651,6 +720,13 @@ export default function CurationPage() {
                     중지 (Stop) 🛑
                   </button>
                 )}
+                <button
+                  onClick={() => void handleForceComplete()}
+                  disabled={loading || publishing || globalSelectedCount === 0}
+                  className='px-6 py-3 bg-gray-100 border border-gray-300 rounded-xl text-lg font-bold text-gray-700 hover:bg-gray-200 transition-all shadow-sm disabled:opacity-50'
+                >
+                   {globalSelectedCount}개 발행 완료 처리 📦
+                </button>
                 <button
                   onClick={() => void handlePublish()}
                   disabled={loading || publishing || globalSelectedCount === 0}
@@ -843,7 +919,7 @@ export default function CurationPage() {
                 </div>
               ) : (
                 <ul className='divide-y divide-gray-50'>
-                  {historyItems.map((item, idx) => (
+                  {historyItems.slice(0, 12).map((item, idx) => (
                     <li key={`${item.link}-${idx}`} className='p-2 hover:bg-gray-50 transition-colors border-b border-gray-50 last:border-0'>
                       <a 
                         href={item.link} 
@@ -866,6 +942,11 @@ export default function CurationPage() {
                       </a>
                     </li>
                   ))}
+                  {historyItems.length > 12 && (
+                    <li className='p-2 text-center text-[11px] text-gray-400'>
+                      + {historyItems.length - 12}개 더 있음
+                    </li>
+                  )}
                 </ul>
               )}
             </div>

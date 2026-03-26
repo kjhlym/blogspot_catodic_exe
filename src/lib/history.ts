@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 
 const historyFilePath = path.join(process.cwd(), 'history.json');
+const HISTORY_LIMIT = 1000; // 보관할 최대 히스토리 수
 
 export interface HistoryItem {
   link: string;
@@ -44,8 +45,7 @@ export function addHistory(link: string, title?: string): void {
         title: title || '제목 없음',
         time: new Date().toISOString()
       });
-      // 최신 50개만 유지 (사이드바 성능 고려)
-      const limitedHistory = history.slice(0, 50);
+      const limitedHistory = history.slice(0, HISTORY_LIMIT);
       fs.writeFileSync(historyFilePath, JSON.stringify(limitedHistory, null, 2), 'utf-8');
     }
   } catch (err) {
@@ -69,8 +69,7 @@ export function addHistoryEntries(entries: HistoryItem[]): void {
     if (updated) {
       // 시간순 정렬 (최신순)
       history.sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime());
-      // 최신 50개만 유지
-      const limitedHistory = history.slice(0, 50);
+      const limitedHistory = history.slice(0, HISTORY_LIMIT);
       fs.writeFileSync(historyFilePath, JSON.stringify(limitedHistory, null, 2), 'utf-8');
     }
   } catch (err) {

@@ -21,6 +21,22 @@ function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+async function readJsonSafely<T>(res: Response): Promise<T> {
+  const contentType = res.headers.get('content-type') ?? '';
+  const bodyText = await res.text();
+
+  if (!contentType.includes('application/json')) {
+    const preview = bodyText.slice(0, 120).replace(/\s+/g, ' ');
+    throw new Error(`서버가 JSON이 아닌 응답을 반환했습니다. (${preview || 'empty response'})`);
+  }
+
+  try {
+    return JSON.parse(bodyText) as T;
+  } catch {
+    throw new Error('JSON 파싱에 실패했습니다. 응답 형식을 확인해주세요.');
+  }
+}
+
 interface Job {
   id: string;
   data: { title: string; blogId: string };
@@ -36,7 +52,7 @@ export default function Dashboard() {
   const fetchJobs = async () => {
     try {
       const res = await fetch('/api/jobs');
-      const data = await res.json();
+      const data = await readJsonSafely<{ jobs: Job[] }>(res);
       setJobs(data.jobs || []);
     } catch (e) {
       console.error(e);
@@ -78,7 +94,7 @@ export default function Dashboard() {
     try {
       const res = await fetch('/api/sync', { method: 'POST' });
       if (res.ok) {
-        const data = await res.json();
+        const data = await readJsonSafely<{ message: string }>(res);
         alert(`성공: ${data.message}`);
       }
     } catch (e) {

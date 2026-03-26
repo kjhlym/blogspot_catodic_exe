@@ -35,7 +35,9 @@ export async function GET(req: Request) {
       const history = getHistory();
       
       // history.json에 있는 링크는 제외하고 새로운 글감만 필터링
-      const filteredItems = groupData.items.filter((item: any) => !history.includes(item.link));
+      // getHistory()는 HistoryItem[] 객체 배열을 반환하므로 link 문자열 Set으로 추출
+      const historyLinkSet = new Set(history.map((h: { link: string }) => h.link));
+      const filteredItems = groupData.items.filter((item: any) => !historyLinkSet.has(item.link));
 
       return NextResponse.json({
         ...groupData,
