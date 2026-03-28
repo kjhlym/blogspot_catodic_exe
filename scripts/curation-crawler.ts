@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { CURATION_PRESET_GROUPS } from '../src/lib/curation-presets';
+import { getHistory } from '../src/lib/history';
 
 /**
  * Google News RSS에서 최신 기사를 수집합니다.
@@ -57,6 +58,8 @@ async function getAcademicPaperLink(query: string): Promise<{ link: string; titl
 async function runCrawler() {
   console.log('🚀 [CRAWLER] 수집 봇 가동 시작...');
   const db: Record<string, any> = {};
+  const history = getHistory();
+  const historyLinkSet = new Set(history.map(h => h.link));
 
   for (const group of CURATION_PRESET_GROUPS) {
     console.log(`\n📌 카테고리 수집 중: ${group.label} (${group.id})`);
@@ -97,6 +100,12 @@ async function runCrawler() {
       }
 
       console.log(`  -> 수집 완료: ${displayTitle}`);
+      
+      // 이미 발행된 글이면 목록에 추가하지 않음
+      if (historyLinkSet.has(realLink)) {
+        console.log(`  ⏭️  이미 발행된 글이므로 건너뜁니다: ${realLink}`);
+        continue;
+      }
 
       groupItems.push({
         title: displayTitle,
@@ -116,6 +125,7 @@ async function runCrawler() {
         id: group.id,
         label: group.label,
         description: group.description,
+        domain: group.domain,
         audience: group.audience,
       },
       items: groupItems,

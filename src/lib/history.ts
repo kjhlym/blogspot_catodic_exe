@@ -38,10 +38,11 @@ export function getHistory(): HistoryItem[] {
 export function addHistory(link: string, title?: string): void {
   try {
     const history = getHistory();
+    const cleanLink = link.trim();
     // 이미 있는 링크인지 확인
-    if (!history.find(h => h.link === link)) {
+    if (!history.find(h => h.link === cleanLink)) {
       history.unshift({
-        link,
+        link: cleanLink,
         title: title || '제목 없음',
         time: new Date().toISOString()
       });

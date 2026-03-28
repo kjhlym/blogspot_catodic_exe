@@ -7,7 +7,8 @@ type PresetGroupMeta = {
   id: string;
   label: string;
   description: string;
-  audience: '40s' | '60s' | 'common';
+  domain: 'catodic' | 'lifeculture';
+  audience: 'technical' | 'common' | 'expert';
   queryCount: number;
 };
 
@@ -62,6 +63,7 @@ async function readJsonSafely<T>(res: Response): Promise<T> {
 }
 
 export default function CurationPage() {
+  const [activeDomain, setActiveDomain] = useState<'catodic' | 'lifeculture'>('catodic');
   const [presetGroups, setPresetGroups] = useState<PresetGroupMeta[]>([]);
   const [activePresetGroupId, setActivePresetGroupId] = useState<string | null>(null);
   const [featuredMeta, setFeaturedMeta] = useState<FeaturedCachePayload['group'] | null>(null);
@@ -168,9 +170,15 @@ export default function CurationPage() {
   const syncCurrentGroup = useCallback((groupId: string) => {
     const cached = featuredCacheRef.current[groupId];
     if (!cached) return;
+    
+    // 현재 선택된 그룹의 도메인으로 domain 자동 동기화 
+    if (cached.group.domain !== activeDomain) {
+      setActiveDomain(cached.group.domain);
+    }
+    
     setFeaturedMeta(cached.group);
     setFeaturedItems([...cached.items]);
-  }, []);
+  }, [activeDomain]);
 
   const loadPresetGroup = useCallback(
     async (groupId: string, options?: { forceRefresh?: boolean }) => {
@@ -179,6 +187,10 @@ export default function CurationPage() {
 
       const cached = featuredCacheRef.current[groupId];
       if (cached && !options?.forceRefresh) {
+        // 싱크 호출 시 도메인도 같이 맞춰줌 (동기화 유실 방지)
+        if (cached.group.domain !== activeDomain) {
+          setActiveDomain(cached.group.domain);
+        }
         setFeaturedMeta(cached.group);
         setFeaturedItems([...cached.items]);
         return;
@@ -203,6 +215,12 @@ export default function CurationPage() {
         };
 
         featuredCacheRef.current[groupId] = payload;
+        
+        // 새로 불러올 때도 도메인 동기화
+        if (payload.group.domain !== activeDomain) {
+          setActiveDomain(payload.group.domain);
+        }
+        
         setFeaturedMeta(payload.group);
         setFeaturedItems([...payload.items]);
       } catch (err) {
@@ -213,7 +231,7 @@ export default function CurationPage() {
         setFeaturedLoading(false);
       }
     },
-    []
+    [activeDomain]
   );
 
   const fetchPresetGroups = useCallback(async () => {
@@ -241,7 +259,16 @@ export default function CurationPage() {
       const groups = data.presetGroups || [];
       setPresetGroups(groups);
 
-      if (groups[0]?.id) {
+      // 현재 도메인(또는 기본 도메인)에 맞는 첫 번째 그룹 로드
+      // loadPresetGroup 내부에서 domain 동기화를 수행하므로 
+      // 여기서는 activeDomain의 현재 상태를 읽어와서 첫 번째 그룹만 트리거합니다.
+      // activeDomain이 useMemo/useCallback 밖에서 사용되므로 dependency 경고가 뜰 수 있지만
+      // 여기서는 초기 로드 시점의 도메인을 맞추기 위함입니다.
+      const firstGroupOfDomain = groups.find(g => g.domain === activeDomain);
+      if (firstGroupOfDomain) {
+        await loadPresetGroup(firstGroupOfDomain.id);
+      } else if (groups[0]?.id) {
+        setActiveDomain(groups[0].domain); // groups[0]의 도메인으로 맞춤
         await loadPresetGroup(groups[0].id);
       } else {
         setActivePresetGroupId(null);
@@ -258,6 +285,7 @@ export default function CurationPage() {
     }
   }, [loadPresetGroup]);
 
+
   const fetchHistory = useCallback(async () => {
     setHistoryLoading(true);
     try {
@@ -265,13 +293,26 @@ export default function CurationPage() {
       if (res.ok) {
         const data = await readJsonSafely<HistoryItem[]>(res);
         setHistoryItems(data);
+
+        // 캐시된 데이터에서도 발행된 항목 제외 처리 (사용자 요청: 완료된 글은 삭제)
+        for (const groupId in featuredCacheRef.current) {
+          const payload = featuredCacheRef.current[groupId];
+          featuredCacheRef.current[groupId].items = payload.items.filter(
+            (item) => !data.some((h) => h.link === item.link)
+          );
+        }
+
+        // 현재 표시 중인 그룹 UI 업데이트
+        if (activePresetGroupId) {
+          syncCurrentGroup(activePresetGroupId);
+        }
       }
     } catch (err) {
       console.error('Fetch history error:', err);
     } finally {
       setHistoryLoading(false);
     }
-  }, []);
+  }, [activePresetGroupId, syncCurrentGroup]);
 
   const syncHistory = async () => {
     if (isSyncing) return;
@@ -337,6 +378,15 @@ export default function CurationPage() {
 
     pollingRef.current = setInterval(async () => {
       try {
+        // 1. 히스토리 먼저 동기화 (실시간 발행 완료 감지용)
+        let latestHistory: { link: string }[] = [];
+        const historyRes = await fetch('/api/history');
+        if (historyRes.ok) {
+          latestHistory = await historyRes.json();
+          setHistoryItems(latestHistory as any);
+        }
+
+        // 2. 발행 상태 동기화
         const res = await fetch('/api/publish/status');
         if (!res.ok) return;
 
@@ -344,39 +394,62 @@ export default function CurationPage() {
           statuses: Record<string, 'pending' | 'completed' | 'failed'>;
         }>(res);
         const statuses = data.statuses || {};
+        const currentHistoryLinks = new Set((latestHistory || []).map((h: { link: string }) => (h.link || '').trim()));
+        
         let hasAnyPending = false;
+        let completedAny = false;
 
         const nextCache: Record<string, FeaturedCachePayload> = {};
         for (const [groupId, payload] of Object.entries(featuredCacheRef.current)) {
+          const originalItems = payload.items;
+          const filteredItems = originalItems.filter((item) => {
+            // 이미 pending이 아니면 그대로 유지
+            if (item.publishStatus !== 'pending') return true;
+
+            const trimmedLink = item.link.trim();
+            // 서버 상태가 completed이거나, 이미 히스토리에 존재한다면 완료된 것
+            const serverStatus = statuses[trimmedLink] || statuses[item.link];
+            const isFinishedInHistory = currentHistoryLinks.has(trimmedLink);
+
+            if (serverStatus === 'completed' || isFinishedInHistory) {
+              completedAny = true;
+              return false; // 리스트에서 즉시 제거
+            }
+            
+            if (serverStatus === 'failed') {
+              item.publishStatus = 'failed';
+              item.selected = false;
+              return true;
+            }
+
+            hasAnyPending = true;
+            return true;
+          });
+
           nextCache[groupId] = {
             group: payload.group,
-            items: payload.items.map((item) => {
-              if (item.publishStatus !== 'pending') return item;
-
-              const serverStatus = statuses[item.link];
-              if (serverStatus === 'completed' || serverStatus === 'failed') {
-                return {
-                  ...item,
-                  publishStatus: serverStatus,
-                  selected: false,
-                };
-              }
-
-              hasAnyPending = true;
-              return item;
-            }),
+            items: filteredItems,
           };
         }
 
         featuredCacheRef.current = nextCache;
 
+        // 현재 그룹 UI 즉시 동기화
         if (activePresetGroupId && nextCache[activePresetGroupId]) {
           syncCurrentGroup(activePresetGroupId);
+        }
+
+        // 하나라도 완료된 게 있다면 히스토리 즉시 갱신 (사이드바 반영)
+        if (completedAny) {
+          void fetchHistory();
         }
 
         if (!hasAnyPending) {
           stopPolling();
           setPublishing(false);
+          setPublishResult('모든 발행 작업이 완료되었습니다.');
+          // 최종적으로 한 번 더 히스토리 갱신
+          void fetchHistory();
         }
       } catch (err) {
         console.error('Failed to poll status:', err);
@@ -453,11 +526,11 @@ export default function CurationPage() {
   };
 
   const handlePublish = async () => {
-    const selectedItemsToPublish = [];
-    for (const [groupId, payload] of Object.entries(featuredCacheRef.current)) {
+    const selectedItemsToPublish: Array<FeaturedCurationItem & { domain: string }> = [];
+    for (const [_, payload] of Object.entries(featuredCacheRef.current)) {
       for (const item of payload.items) {
         if (item.selected && !item.publishStatus) {
-          selectedItemsToPublish.push(item);
+          selectedItemsToPublish.push({ ...item, domain: payload.group.domain });
         }
       }
     }
@@ -491,6 +564,7 @@ export default function CurationPage() {
             keyword: item.keyword,
             topic: item.topic,
             summary: item.summary,
+            domain: item.domain, // 도메인 정보 추가
           })),
           headless: !showBrowser,
         }),
@@ -690,17 +764,78 @@ export default function CurationPage() {
                   )}
                 </div>
 
+                {/* 도메인 전환 대형 탭 */}
+                <div className='flex flex-col sm:flex-row gap-4 mb-8'>
+                  <button
+                    onClick={() => {
+                      setActiveDomain('catodic');
+                      const firstCP = presetGroups.find(g => g.domain === 'catodic');
+                      if (firstCP) loadPresetGroup(firstCP.id);
+                    }}
+                    className={`flex-1 group relative overflow-hidden p-6 rounded-2xl border-2 transition-all duration-300 hover:shadow-xl ${
+                      activeDomain === 'catodic'
+                        ? 'border-blue-600 bg-blue-50/50 ring-4 ring-blue-100'
+                        : 'border-gray-200 bg-white hover:border-blue-300'
+                    }`}
+                  >
+                    <div className='flex items-center gap-4 relative z-10'>
+                      <div className={`p-3 rounded-xl transition-colors ${
+                        activeDomain === 'catodic' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-500 group-hover:bg-blue-100 group-hover:text-blue-600'
+                      }`}>
+                        <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                        </svg>
+                      </div>
+                      <div className='text-left'>
+                        <h3 className={`text-xl font-black ${activeDomain === 'catodic' ? 'text-blue-900' : 'text-gray-700'}`}>전기방식</h3>
+                        <p className={`text-sm ${activeDomain === 'catodic' ? 'text-blue-600' : 'text-gray-400'}`}>Technical Cathodic Protection</p>
+                      </div>
+                    </div>
+                    {activeDomain === 'catodic' && <div className='absolute bottom-0 left-0 h-1.5 w-full bg-blue-600' />}
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setActiveDomain('lifeculture');
+                      const firstLife = presetGroups.find(g => g.domain === 'lifeculture');
+                      if (firstLife) loadPresetGroup(firstLife.id);
+                    }}
+                    className={`flex-1 group relative overflow-hidden p-6 rounded-2xl border-2 transition-all duration-300 hover:shadow-xl ${
+                      activeDomain === 'lifeculture'
+                        ? 'border-purple-600 bg-purple-50/50 ring-4 ring-purple-100'
+                        : 'border-gray-200 bg-white hover:border-purple-300'
+                    }`}
+                  >
+                    <div className='flex items-center gap-4 relative z-10'>
+                      <div className={`p-3 rounded-xl transition-colors ${
+                        activeDomain === 'lifeculture' ? 'bg-purple-600 text-white' : 'bg-gray-100 text-gray-500 group-hover:bg-purple-100 group-hover:text-purple-600'
+                      }`}>
+                        <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
+                        </svg>
+                      </div>
+                      <div className='text-left'>
+                        <h3 className={`text-xl font-black ${activeDomain === 'lifeculture' ? 'text-purple-900' : 'text-gray-700'}`}>생활문화</h3>
+                        <p className={`text-sm ${activeDomain === 'lifeculture' ? 'text-purple-600' : 'text-gray-400'}`}>Depth Life & Culture Insight</p>
+                      </div>
+                    </div>
+                    {activeDomain === 'lifeculture' && <div className='absolute bottom-0 left-0 h-1.5 w-full bg-purple-600' />}
+                  </button>
+                </div>
+
                 <div className='flex flex-wrap gap-2'>
-                  {presetGroups.map((group) => {
+                  {presetGroups.filter(g => g.domain === activeDomain).map((group) => {
                     const isActive = group.id === activePresetGroupId;
                     return (
                       <button
                         key={group.id}
                         onClick={() => void loadPresetGroup(group.id)}
                         disabled={featuredLoading && isActive}
-                        className={`rounded-full border px-4 py-2 text-sm font-semibold transition-colors ${
+                        className={`rounded-full border px-4 py-2 text-sm font-semibold transition-all ${
                           isActive
-                            ? 'border-blue-600 bg-blue-600 text-white shadow-sm'
+                            ? activeDomain === 'catodic' 
+                              ? 'border-blue-600 bg-blue-600 text-white shadow-sm'
+                              : 'border-purple-600 bg-purple-600 text-white shadow-sm'
                             : 'border-gray-300 bg-white text-gray-700 hover:border-blue-300 hover:bg-blue-50'
                         }`}
                       >
@@ -801,8 +936,13 @@ export default function CurationPage() {
                     ) : (
                       featuredItems
                         .filter(item => {
-                          const isAlreadyPublished = historyItems.some(h => h.link === item.link);
-                          return item.publishStatus !== 'completed' && !isAlreadyPublished;
+                          const isAlreadyPublished = historyItems.some(h => {
+                            const hLink = typeof h?.link === 'string' ? h.link.trim() : '';
+                            const iLink = typeof item?.link === 'string' ? item.link.trim() : '';
+                            return hLink !== '' && hLink === iLink;
+                          });
+                          const isCompleted = item.publishStatus === 'completed';
+                          return !isCompleted && !isAlreadyPublished;
                         })
                         .map((item, index) => (
                         <tr key={`${item.link}-${index}`} className={item.selected ? 'bg-blue-50/50' : 'bg-white hover:bg-gray-50/50'}>

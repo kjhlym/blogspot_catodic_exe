@@ -9,6 +9,7 @@
     "start": "next start",
     "lint": "eslint",
     "worker": "node src/scripts/run-worker.js",
+    "curation": "tsx src/scripts/run-curation.ts",
     "gemini-post": "node gemini-to-blogger-vibe.js",
     "gemini-post-blogger": "node gemini-to-blogger-vibe.js"
   },

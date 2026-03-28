@@ -5,50 +5,67 @@ import { getHistory } from './history';
 
 // 1. RSS에서 여러 아이템을 파싱하여 히스토리에 없는 새로운 링크를 찾음
 async function getNewArticleLink(query: string, history: string[]) {
-  try {
-    const res = await fetch(`https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=ko&gl=KR&ceid=KR:ko`);
-    if (!res.ok) return null;
-    
-    const text = await res.text();
-    // RSS의 모든 <item> 블록 추출
-    const itemMatches = text.matchAll(/<item>([\s\S]*?)<\/item>/g);
-    
-    for (const match of itemMatches) {
-      const itemContent = match[1];
-      const linkMatch = itemContent.match(/<link>(.*?)<\/link>/);
-      const titleMatch = itemContent.match(/<title>(.*?)<\/title>/);
+  const trySearch = async (q: string) => {
+    try {
+      const res = await fetch(`https://news.google.com/rss/search?q=${encodeURIComponent(q)}&hl=ko&gl=KR&ceid=KR:ko`);
+      if (!res.ok) return null;
       
-      if (linkMatch && linkMatch[1]) {
-        const link = linkMatch[1].trim();
-        const title = titleMatch ? titleMatch[1].trim() : query;
+      const text = await res.text();
+      const itemMatches = text.matchAll(/<item>([\s\S]*?)<\/item>/g);
+      
+      for (const match of itemMatches) {
+        const itemContent = match[1];
+        const linkMatch = itemContent.match(/<link>(.*?)<\/link>/);
+        const titleMatch = itemContent.match(/<title>(.*?)<\/title>/);
         
-        // 히스토리에 없는 링크라면 당첨!
-        if (!history.includes(link)) {
-          return { link, title };
+        if (linkMatch && linkMatch[1]) {
+          const link = linkMatch[1].trim();
+          const title = titleMatch ? titleMatch[1].trim() : q;
+          
+          if (!history.includes(link)) {
+            return { link, title };
+          }
         }
       }
+    } catch(e) {
+      console.error(`[CRAWLER] RSS fetch error for ${q}:`, e);
     }
-  } catch(e) {
-    console.error(`[CRAWLER] RSS fetch error for ${query}:`, e);
+    return null;
+  };
+
+  // 1차 시도: 원래의 쿼리 (site: 포함 가능)
+  let result = await trySearch(query);
+  if (result) return result;
+
+  // 2차 시도: site: 연산자가 포함되어 있는데 결과가 없는 경우, site:를 제거하고 도메인 이름을 키워드로 포함하여 재검색
+  if (query.includes('site:')) {
+    const fallbackQuery = query.replace(/site:([^\s]+)/, '$1');
+    console.log(`  [CRAWLER] '${query}' 결과 없음 -> '${fallbackQuery}'로 재시도...`);
+    result = await trySearch(fallbackQuery);
   }
-  return null;
+
+  return result;
 }
 
-// 2. OpenAlex 논문 검색 (여러 결과 중 새로운 것 선택)
+// 2. OpenAlex 논문 검색 (최신순 정렬 추가 및 결과 정제)
 async function getNewAcademicPaperLink(query: string, history: string[]) {
   try {
-    const url = `https://api.openalex.org/works?search=${encodeURIComponent(query)}&per-page=10`;
+    // 최신순 정렬(publication_year:desc) 추가하여 더 유용한 자료 수집
+    const url = `https://api.openalex.org/works?search=${encodeURIComponent(query)}&sort=publication_year:desc&per-page=10`;
     const res = await fetch(url);
     if (!res.ok) return null;
     const json = await res.json();
     
     if (json.results && json.results.length > 0) {
       for (const result of json.results) {
+        // DOI가 있으면 DOI를, 없으면 OpenAlex ID를 링크로 사용
         const link = result.doi || result.id;
         if (!history.includes(link)) {
+          // 제목에서 불필요한 태그 등 제거 (필요시)
+          const cleanTitle = result.title.replace(/<\/?[^>]+(>|$)/g, "");
           return {
             link: link,
-            title: result.title
+            title: cleanTitle
           };
         }
       }
@@ -59,12 +76,14 @@ async function getNewAcademicPaperLink(query: string, history: string[]) {
   return null;
 }
 
-export async function runCurationCrawler() {
+export async function runCurationCrawler(groupId?: string) {
   console.log('🚀 [CRAWLER] 최신 데이터 수집 시작 (미발행 위주)...');
   const db: Record<string, any> = {};
-  const history = getHistory(); // d:/rpa/blogspot_catodic_exe/history.json
+  const historyItems = getHistory();
+  const history = historyItems.map(h => h.link); // d:/rpa/blogspot_catodic_exe/history.json
 
   for (const group of CURATION_PRESET_GROUPS) {
+    if (groupId && group.id !== groupId) continue;
     console.log(`\n📌 카테고리 기사 수집: ${group.label}`);
     const groupItems = [];
 

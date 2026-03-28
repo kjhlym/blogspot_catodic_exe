@@ -51,3 +51,5 @@ output/
 .env.production
 .env.development
 tmp/
+publish-status.json
+*.log

@@ -23,23 +23,24 @@ if not exist "node_modules" (
     call npm install
 )
 
-REM 3. Set Port and Run
-set PORT=3002
-echo [*] Starting Next.js Dashboard (Background)...
-start /b cmd /c "set PORT=%PORT% && npm run dev"
+REM 3. Run Main Integrated Dashboard (Port 3002)
+echo [*] Starting Main Dashboard (Next.js Port 3002)...
+start /b cmd /c "npm run dev -- -p 3002"
 
-echo [*] Starting RPA Worker (Background)...
+REM 4. Run Background Worker
+echo [*] Starting Background Worker...
 start /b cmd /c "npm run worker"
 
-REM 4. Auto-open Browser (with a short delay for server startup)
-echo [*] Opening Next.js Dashboard in 5 seconds...
-timeout /t 5 >nul
-start http://localhost:%PORT%/curation
+REM 5. Auto-open Browser (with a short delay for server startup)
+echo [*] Opening Main Integrated Dashboard in 10 seconds...
+timeout /t 10 >nul
+start http://localhost:3002/curation
 
 echo ==========================================
-echo   Main Dashboard: http://localhost:%PORT%/curation
+echo   Main Dashboard: http://localhost:3002/curation
+echo   Background Worker: Running...
 echo ==========================================
 echo.
-echo [!] DO NOT close the dashboard or worker windows.
-echo [!] Keep this window open until you are finished.
+echo [!] DO NOT close this window while using the RPA.
+echo [!] Press any key to stop all background processes (closing this window also stops them).
 pause

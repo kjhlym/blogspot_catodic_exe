@@ -32,8 +32,32 @@ export class Notifier {
    * 작업 단계별 로그 전송
    */
   static async logStep(jobId: string, step: string, message: string) {
-    const formatted = `[Job #${jobId}] **${step}** - ${message}`;
-    console.log(formatted);
-    // 선택적으로 모든 스텝을 디코에 보낼 수도 있음 (현재는 로그만)
+    console.log(`[Job ${jobId}] [${step}] ${message}`);
+    
+    try {
+      // 대시보드 API로 로그 전송 (워커가 별도 프로세스일 때 필요)
+      await fetch('http://localhost:3002/api/logs/worker', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobId, step, message }),
+      }).catch(() => {
+        // 대시보드가 꺼져있을 경우 무시
+      });
+    } catch (e) {
+      // fetch 실패 시 콘솔에만 남김
+    }
+  }
+
+  static async logError(jobId: string, step: string, message: string, error?: any) {
+    const errorMessage = error ? `${message}: ${error.message || error}` : message;
+    console.error(`[Job ${jobId}] [${step}] ERROR: ${errorMessage}`);
+    
+    try {
+      await fetch('http://localhost:3002/api/logs/worker', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobId, step, message: errorMessage, type: 'error' }),
+      }).catch(() => {});
+    } catch (e) {}
   }
 }

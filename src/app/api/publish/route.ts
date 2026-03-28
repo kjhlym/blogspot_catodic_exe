@@ -1,10 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { logManager } from '@/lib/log-manager';
-import { spawn } from 'child_process';
-import path from 'path';
-import fs from 'fs';
-import { addHistory } from '@/lib/history';
-import { setPublishStatus } from '@/lib/status';
+import { bloggerQueue } from '@/lib/queue';
 
 interface PublishItem {
   id: string;
@@ -13,125 +9,77 @@ interface PublishItem {
   topic: string;
   summary: string;
   link: string;
+  category?: string;
+  domain?: string;
 }
 
 export async function POST(req: NextRequest) {
   try {
-    const { items, options } = await req.json();
+    const { items, headless } = await req.json(); // frontend sends headless here
 
     if (!items || !Array.isArray(items) || items.length === 0) {
       return NextResponse.json({ error: 'No items provided' }, { status: 400 });
     }
 
-    // 백그라운드에서 작업 시작
-    startPublishingJob(items, options || {});
+    // items가 큐에 추가될 때 headless 옵션도 같이 전달되도록 처리
+    await startPublishingJobsInQueue(items, { headless });
 
     return NextResponse.json({ 
       success: true, 
-      message: `${items.length}개 아티클 발행 작업이 시작되었습니다.` 
+      message: `${items.length}개 아티클 발행 작업이 큐에 추가되었습니다.` 
     });
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
 
-async function startPublishingJob(items: PublishItem[], options: { headless?: boolean }) {
-  const rootDir = process.cwd();
-  const scriptPath = path.join(rootDir, 'gemini-to-blogger-vibe.js');
-
+async function startPublishingJobsInQueue(items: PublishItem[], options: { headless?: boolean }) {
   logManager.setAborted(false);
-  logManager.broadcast('status', 'running', { message: '발행 작업 시작' });
+  logManager.broadcast('status', 'running', { message: '발행 작업 큐 등록 중' });
   
-  let successCount = 0;
-  let failCount = 0;
-
   for (let i = 0; i < items.length; i++) {
-    if (logManager.isAborted()) {
-      logManager.broadcast('log', '🛑 사용자에 의해 중단되었습니다.');
-      break;
-    }
-
     const item = items[i];
-    logManager.broadcast('log', `\n[${i + 1}/${items.length}] 📝 아티클 생성 시작: ${item.keyword}`);
-    logManager.broadcast('status', 'processing', { 
-      current: i + 1, 
-      total: items.length, 
-      keyword: item.keyword 
-    });
+    
+    // 도메인 또는 카테고리에 따른 블로그 ID 배정 로직
+    let blogId = process.env.BLOGGER_DEFAULT_BLOG_ID || process.env.BLOGGER_BLOG_ID || "";
+    
+    // 생활문화 전용 블로그 ID (8772286578401026851) 매핑 강화
+    // 1. 도메인이 'lifeculture'인 경우
+    // 2. 카테고리에 '생활문화'가 포함된 경우
+    // 3. 토픽에 '생활'이나 '문화'가 포함된 경우
+    const isLifeCulture = 
+      item.domain === 'lifeculture' || 
+      item.category?.includes('생활문화') || 
+      /생활|문화|life|culture/i.test(item.topic || "") ||
+      /생활|문화/i.test(item.category || "");
 
-    try {
-      // 1. article.txt 작성
-      const articleContent = `Keyword: ${item.keyword}\nTopic: ${item.topic}\nSummary: ${item.summary}`;
-      fs.writeFileSync(path.join(rootDir, 'article.txt'), articleContent, 'utf8');
-
-      // 2. 스크립트 실행 (spawn으로 실시간 스트리밍)
-      const args = [scriptPath];
-      // 사용자가 브라우저 보기를 선택했거나(options.headless === false), 명시적으로 headless가 아닌 경우
-      if (options.headless === true) {
-        args.push('--headless');
-      } 
-      // 기본값은 headed 모드로 실행 (사용자 요청)
-
-      await new Promise<void>((resolve, reject) => {
-        const child = spawn('node', args, { cwd: rootDir });
-
-        child.stdout.on('data', (data) => {
-          const lines = data.toString().split('\n');
-          lines.forEach((line: string) => {
-            if (line.trim()) {
-              logManager.broadcast('log', `   > ${line.trim()}`);
-            }
-          });
-        });
-
-        child.stderr.on('data', (data) => {
-          const lines = data.toString().split('\n');
-          lines.forEach((line: string) => {
-            if (line.trim() && !line.includes('Debugger attached')) {
-              logManager.broadcast('log', `   ⚠ ${line.trim()}`);
-            }
-          });
-        });
-
-        child.on('close', (code) => {
-          if (code === 0) {
-            logManager.broadcast('log', `   ✅ 발행 성공: ${item.keyword}`);
-            addHistory(item.link, item.title);
-            setPublishStatus(item.link, 'completed'); // 폴링이 스피너 중지 가능하도록 상태 저장
-            successCount++;
-            resolve();
-          } else {
-            logManager.broadcast('error', `   ❌ 발행 실패 (코드 ${code}): ${item.keyword}`);
-            setPublishStatus(item.link, 'failed'); // 실패 상태도 저장
-            failCount++;
-            resolve();
-          }
-        });
-
-        child.on('error', (err) => {
-          logManager.broadcast('error', `   ❌ 실행 오류: ${err.message}`);
-          failCount++;
-          resolve();
-        });
-
-        // 사용자가 중지 버튼을 누를 경우 프로세스 강제 종료
-        const checkAbort = setInterval(() => {
-          if (logManager.isAborted()) {
-            child.kill();
-            clearInterval(checkAbort);
-          }
-        }, 1000);
-      });
-
-    } catch (err: any) {
-      logManager.broadcast('error', `❌ 예외 발생: ${err.message}`);
-      failCount++;
+    if (isLifeCulture) {
+      blogId = process.env.BLOGGER_LIFECULTURE_BLOG_ID || "8772286578401026851";
     }
+
+    logManager.broadcast('log', `[${i + 1}/${items.length}] 큐 등록: ${item.keyword} (Domain: ${item.domain}, Blog: ${blogId === process.env.BLOGGER_LIFECULTURE_BLOG_ID ? 'Life' : 'Default'})`);
+    
+    await bloggerQueue.add('publish-job', {
+      email: process.env.GOOGLE_GEMINI_ID,
+      password: process.env.GOOGLE_GEMINI_PW,
+      blogId: blogId,
+      topic: item.topic,
+      keyword: item.keyword,
+      summary: item.summary,
+      link: item.link,
+      category: item.category,
+      headless: options.headless !== undefined ? options.headless : false, // 기본값 false (Headed)
+      publish: true,
+    }, {
+      jobId: `publish-${Date.now()}-${i}`,
+      removeOnComplete: true,
+      removeOnFail: false
+    });
   }
 
-  logManager.broadcast('done', '발행 작업 완료', {
-    success: successCount,
-    failed: failCount,
+  logManager.broadcast('done', '작업 등록 완료', {
+    success: items.length,
+    failed: 0,
     total: items.length
   });
   logManager.broadcast('status', 'idle');

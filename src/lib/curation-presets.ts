@@ -10,6 +10,7 @@ export type CurationPresetGroup = {
   id: string;
   label: string;
   description: string;
+  domain: 'catodic' | 'lifeculture';
   audience: 'technical' | 'common' | 'expert';
   queries: CurationPresetQuery[];
 };
@@ -19,6 +20,7 @@ export const CURATION_PRESET_GROUPS: CurationPresetGroup[] = [
     id: 'cp-standards',
     label: '국제 기술 표준 분석',
     description: 'AMPP(NACE), API, ISO/EN 등 국제 표준 규격의 최신 동향 및 해석',
+    domain: 'catodic',
     audience: 'expert',
     queries: [
       { query: 'AMPP SP0169-2015 Control of External Corrosion on Underground or Submerged Metallic Piping Systems', searchType: 'web', domain: 'ampp.org' },
@@ -32,6 +34,7 @@ export const CURATION_PRESET_GROUPS: CurationPresetGroup[] = [
     id: 'cp-research',
     label: '학술 정보 및 최신 연구',
     description: 'Google Scholar 및 RISS 기반의 부식 방지 및 전기방식 신기술 연구 논문 요약',
+    domain: 'catodic',
     audience: 'technical',
     queries: [
       { query: 'latest trends in smart cathodic protection remote monitoring systems', searchType: 'web', domain: 'scholar.google.com' },
@@ -45,6 +48,7 @@ export const CURATION_PRESET_GROUPS: CurationPresetGroup[] = [
     id: 'cp-corporate-blogs',
     label: '글로벌 기업 기술 블로그',
     description: 'Matcor, Cathodic Protection Co Ltd 등 글로벌 선도 기업의 실무 사례 및 기술 리포트',
+    domain: 'catodic',
     audience: 'technical',
     queries: [
       { query: 'deep well groundbed design case studies', searchType: 'web', domain: 'matcor.com' },
@@ -58,6 +62,7 @@ export const CURATION_PRESET_GROUPS: CurationPresetGroup[] = [
     id: 'cp-ai-curation',
     label: 'AI 및 실무 실전 가이드',
     description: '실무 Q&A, 용어 해설, 점검 리스트 등 실전 업무에 즉시 활용 가능한 콘텐츠',
+    domain: 'catodic',
     audience: 'common',
     queries: [
       { query: '전기방식 전위 측정시 IR Drop 현상과 제거 방법 가이드', searchType: 'web' },
@@ -74,6 +79,7 @@ export const CURATION_PRESET_GROUPS: CurationPresetGroup[] = [
     id: 'cp-measurement',
     label: '전위 측정 및 해석',
     description: 'IR Drop 제거, 기준전극 관리, 유도 협착 판별 등 데이터 분석 영역',
+    domain: 'catodic',
     audience: 'expert',
     queries: [
       { query: 'OFF 전위(Instant Off Potential) 측정 시 IR Drop 제거 테크닉', searchType: 'web' },
@@ -85,6 +91,7 @@ export const CURATION_PRESET_GROUPS: CurationPresetGroup[] = [
     id: 'cp-engineering',
     label: '정류기 및 시스템 설계',
     description: '심매설 양극 가스 폐쇄 방지, 다중 배관 간섭 해결 등 엔지니어링 영역',
+    domain: 'catodic',
     audience: 'expert',
     queries: [
       { query: '심매설 양극(Deep Well Anode) 시공 시 가스 폐쇄(Gas Blocking) 방지', searchType: 'web' },
@@ -96,6 +103,7 @@ export const CURATION_PRESET_GROUPS: CurationPresetGroup[] = [
     id: 'cp-materials',
     label: '양극 및 재질 특성',
     description: '기수역 양극 효율, 고비저항 지역 양극 배치 등 자재 선정 영역',
+    domain: 'catodic',
     audience: 'technical',
     queries: [
       { query: '기수역(Brackish Water) 아연 양극 대비 알루미늄 양극 효율 비교', searchType: 'web' },
@@ -107,6 +115,7 @@ export const CURATION_PRESET_GROUPS: CurationPresetGroup[] = [
     id: 'cp-construction',
     label: '시공 및 유지관리',
     description: '피복별 전류 요구량, 절연 조인트 점검, 조간대 부식 방지 등 현장 실무',
+    domain: 'catodic',
     audience: 'technical',
     queries: [
       { query: '배관 피복(Coating) 종류에 따른 방식 전류 밀도 설계 상수', searchType: 'web' },
@@ -118,11 +127,26 @@ export const CURATION_PRESET_GROUPS: CurationPresetGroup[] = [
     id: 'cp-trends',
     label: '법규 및 최신 트렌드',
     description: 'KGS 검사 기준 변경, 수소 배관 전기방식 등 신뢰도 관리 영역',
+    domain: 'catodic',
     audience: 'expert',
     queries: [
       { query: '2026년 개정 KGS 전기방식 검사 기준 주요 변경점 분석', searchType: 'web' },
       { query: '수소 배관(Hydrogen Pipeline) 상용화와 수소 취성 방지 전압 제한', searchType: 'web' },
       { query: '전기방식 원격 모니터링 데이터 인정 범위 및 현장 측정 주기', searchType: 'web' },
+    ],
+  },
+  {
+    id: 'life-culture',
+    label: '실기로운 생활문화',
+    description: '생활 정보, 문화 동향, 건강 및 라이프스타일 심도 있는 자료 공유',
+    domain: 'lifeculture',
+    audience: 'common',
+    queries: [
+      { query: '최신 생활 문화 트렌드', searchType: 'news' },
+      { query: '라이프스타일 디자인 영감', searchType: 'news' },
+      { query: '현대인의 심도 있는 문화 생활', searchType: 'web' },
+      { query: '건강하고 가치 있는 삶을 위한 팁', searchType: 'news' },
+      { query: '글로벌 문화 뉴스 및 인사이트', searchType: 'news' },
     ],
   },
 ];

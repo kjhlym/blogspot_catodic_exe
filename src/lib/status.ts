@@ -2,6 +2,8 @@ import fs from 'fs';
 import path from 'path';
 
 const statusFilePath = path.join(process.cwd(), 'publish-status.json');
+// console.log('[Status] statusFilePath:', statusFilePath);
+
 
 export function getPublishStatuses(): Record<string, string> {
   try {

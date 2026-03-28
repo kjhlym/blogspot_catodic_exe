@@ -13,7 +13,7 @@ function methodNotAllowed() {
 export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
-    const presetGroupId = searchParams.get('presetGroup');
+    const presetGroupId = searchParams.get('group') || searchParams.get('presetGroup');
 
     if (presetGroupId) {
       // 로컬 DB (curation-db.json) 경로
@@ -50,6 +50,7 @@ export async function GET(req: Request) {
       id: group.id,
       label: group.label,
       description: group.description,
+      domain: group.domain,
       audience: group.audience,
       queryCount: group.queries.length,
     }));
