@@ -325,13 +325,29 @@ export class GeminiBot {
                  .map(s => s.replace(/["\n\r]/g, '').trim())
                  .filter(Boolean);
             }
-            const unescapeStr = (str: string) => str ? str.replace(/\\"/g, '"').replace(/\\\\/g, '\\').replace(/\\n/g, '\n') : '';
+            const unescapeStr = (str: string) => {
+                if (!str) return '';
+                return str
+                    .replace(/\\"/g, '"')
+                    .replace(/\\\\/g, '\\')
+                    .replace(/(\\n)+/g, '\n')
+                    .replace(/(\\r)+/g, '\n')
+                    .replace(/(\\t)+/g, ' ')
+                    .replace(/\\r\\n/g, '\n')
+                    .replace(/\\n/g, '\n')
+                    .replace(/\\r/g, '\n');
+            };
+            
+            const htmlRaw = htmlMatch[1];
+            // HTML 본문 내부의 리터럴 \n들을 실제 뉴라인으로 변경하여 가독성 확보
+            const cleanedHtml = unescapeStr(htmlRaw);
+
             return {
                 title: unescapeStr(titleMatch[1]),
                 description: descriptionMatch ? unescapeStr(descriptionMatch[1]) : '',
                 thumbnail_title: thumbnailMatch ? unescapeStr(thumbnailMatch[1]) : '',
                 mid_image_keyword: midImageMatch ? unescapeStr(midImageMatch[1]) : '',
-                html: unescapeStr(htmlMatch[1]),
+                html: cleanedHtml,
                 labels: labels
             };
         }

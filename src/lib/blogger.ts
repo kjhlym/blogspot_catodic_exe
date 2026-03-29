@@ -195,7 +195,24 @@ export class BloggerBot {
     }
 
     const combined = imageHtml ? `${imageHtml}\n${content.trim()}` : content.trim();
-    return this.wrapWithMathJax(combined);
+    
+    // 리터럴 \n, \r, \t 문자열이 HTML 본문에 포함되어 실제 줄바꿈 대신 텍스트로 노출되는 현상 방지
+    // 매우 공격적인 정규표현식으로 실질적인 모든 백슬래시 n 형태를 실제 개행으로 변환
+    let cleaned = combined
+        .replace(/(\\n)+/g, '\n')
+        .replace(/(\\r)+/g, '\n')
+        .replace(/(\\t)+/g, ' ')
+        .replace(/\\r\\n/g, '\n');
+
+    // 간혹 \\n 형태로 남아 있는 경우를 위해 재차 처리
+    cleaned = cleaned.replace(/\\n/g, '\n').replace(/\\r/g, '\n');
+
+    // 실제 뉴라인(\n)이 HTML 소스에서만 줄바꿈 역할을 하도록 하고, 
+    // 연속된 뉴라인은 가독성을 위해 적절히 조절함
+    cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
+
+    // 최종적으로 MathJax 래핑 및 반환
+    return this.wrapWithMathJax(cleaned);
   }
 
   private stripExistingInlineDataImages(html: string): string {
@@ -269,28 +286,49 @@ export class BloggerBot {
 
   async openEditor(page: Page, blogId: string, postId?: string) {
     if (postId) {
-      await page.goto(`https://www.blogger.com/blog/post/edit/${blogId}/${postId}`, { waitUntil: 'networkidle' });
+      console.log(`[BloggerBot] 포스트 수정 모드 진입: ${postId}`);
+      await page.goto(`https://www.blogger.com/blog/post/edit/${blogId}/${postId}`, { waitUntil: 'networkidle', timeout: 60000 });
     } else {
-      await page.goto(`https://www.blogger.com/blog/posts/${blogId}`, { waitUntil: 'networkidle' });
-      const newPostSelectors = ['div[role="button"]:has-text("새 글")', 'div[role="button"]:has-text("New Post")', '.UpT69c'];
+      console.log(`[BloggerBot] 새 글 작성 모드 진입 (Blog ID: ${blogId})`);
+      // 403 에러 방지를 위해 메인 페이지 거쳐가기 시도
+      try {
+        await page.goto('https://www.blogger.com/home', { waitUntil: 'networkidle', timeout: 30000 });
+      } catch (e) {}
+      
+      await page.goto(`https://www.blogger.com/blog/posts/${blogId}`, { waitUntil: 'networkidle', timeout: 60000 });
+      
+      const newPostSelectors = [
+        'div[role="button"]:has-text("새 글")', 
+        'div[role="button"]:has-text("New Post")', 
+        'div[aria-label="New post"]',
+        '.UpT69c'
+      ];
+      
       let clicked = false;
+      await page.waitForTimeout(2000); // UI 안정화 대기
+      
       for (const sel of newPostSelectors) {
         const btn = page.locator(sel).first();
         if (await btn.isVisible({ timeout: 5000 }).catch(() => false)) {
+          console.log(`[BloggerBot] 새 글 버튼 클릭 (${sel})`);
           await btn.click();
           clicked = true;
           break;
         }
       }
       if (!clicked) {
+        console.log('[BloggerBot] 새 글 버튼 (JS fallback) 클릭 시도');
         await page.evaluate(() => {
           const btn = (Array.from(document.querySelectorAll('div[role="button"]')) as HTMLElement[]).find(b => b.innerText.includes('새 글') || b.innerText.includes('New Post'));
           if (btn) btn.click();
         });
       }
-      await page.waitForURL(/\/blog\/post\/edit\//, { timeout: 30000 });
+      
+      console.log('[BloggerBot] 에디터 URL 전환 대기 중...');
+      await page.waitForURL(/\/blog\/post\/edit\//, { timeout: 45000 });
     }
-    await page.waitForSelector(TITLE_SELECTORS, { timeout: 30000 });
+    await page.waitForSelector(TITLE_SELECTORS, { timeout: 45000 });
+    console.log('[BloggerBot] 에디터 진입 성공');
   }
 
   private async setTitle(page: Page, title: string) {
@@ -398,6 +436,15 @@ export class BloggerBot {
       console.log("[BloggerBot] insertText를 이용한 본문 삽입 시도...");
       await this.page.keyboard.insertText(content);
       
+      // 3.5 이미지 업로드 다이얼로그가 뜨면 사라질 때까지 대기
+      try {
+        const uploadDialog = this.page.locator('div[role="dialog"]:has-text("이미지 업로드 중"), div[role="dialog"]:has-text("Uploading image")');
+        if (await uploadDialog.isVisible({ timeout: 2000 })) {
+          console.log("[BloggerBot] 이미지 업로드 중... 완료 대기");
+          await uploadDialog.waitFor({ state: 'hidden', timeout: 30000 });
+        }
+      } catch (e) {}
+      
       // 4. 에디터 이벤트 인식을 위한 추가 액션 (스페이스 입력 후 삭제)
       await this.page.waitForTimeout(1000);
       await this.page.keyboard.press("End");
@@ -500,37 +547,115 @@ export class BloggerBot {
   private async setLabels(labels: string[]) {
     if (!this.page || !labels.length) return;
     try {
-      // 1. 사이드바의 '라벨' 섹션 열기
-      const labelSection = this.page.locator('div[aria-label="라벨"], div[aria-label="Labels"]').first();
-      await labelSection.waitFor({ state: 'visible', timeout: 5000 });
+      console.log(`[BloggerBot] 라벨 설정 시도: ${labels.join(', ')}`);
       
-      const isExpanded = await labelSection.evaluate(el => el.getAttribute("aria-expanded") === "true");
-      if (!isExpanded) {
-        await labelSection.click({ force: true });
-        await this.page.waitForTimeout(1000);
+      // 1. 라벨 섹션 찾기 및 확장
+      const labelHeaderSelectors = [
+        'div[aria-label="라벨"]', 
+        'div[aria-label="Labels"]',
+        'div[role="button"]:has-text("라벨")',
+        'div[role="button"]:has-text("Labels")',
+        '.UpT69c:has-text("라벨")',
+        '.UpT69c:has-text("Labels")'
+      ];
+      
+      let header = null;
+      for (const sel of labelHeaderSelectors) {
+        const el = this.page.locator(sel).first();
+        if (await el.isVisible({ timeout: 2000 }).catch(() => false)) {
+          header = el;
+          break;
+        }
       }
 
-      // 2. 입력창 찾기
-      const inputSelector = 'textarea[aria-label="라벨"], textarea[aria-label="Labels"]';
-      const input = this.page.locator(inputSelector).first();
-      await input.waitFor({ state: 'visible', timeout: 5000 });
+      if (!header) {
+        console.warn("[BloggerBot] 라벨 섹션 헤더를 찾을 수 없습니다.");
+        return;
+      }
+
+      // 확장 여부 확인 및 클릭
+      const isExpanded = await header.evaluate(el => {
+        // aria-expanded가 직접 달려 있거나 부모에 달려 있을 수 있음
+        const expanded = el.getAttribute("aria-expanded") || el.parentElement?.getAttribute("aria-expanded");
+        return expanded === "true";
+      });
+
+      if (!isExpanded) {
+        console.log("[BloggerBot] 라벨 섹션 확장 중...");
+        await header.click({ force: true });
+        await this.page.waitForTimeout(2000);
+      }
+
+      // 2. 입력창 찾기 (확장 후 나타남)
+      const inputSelectors = [
+        'textarea[aria-label="라벨"]', 
+        'textarea[aria-label="Labels"]',
+        'input[aria-label="라벨"]',
+        'input[aria-label="Labels"]',
+        'textarea.vO5S4d',
+        'input.vO5S4d',
+        '[role="textbox"][aria-label="라벨"]',
+        '[role="textbox"][aria-label="Labels"]',
+        '.vO5S4d textarea',
+        '.vO5S4d input'
+      ];
+
+      let input = null;
+      for (const sel of inputSelectors) {
+        const el = this.page.locator(sel).first();
+        if (await el.isVisible({ timeout: 5000 }).catch(() => false)) {
+          input = el;
+          break;
+        }
+      }
+
+      if (!input) {
+        // 섹션이 안 열렸을 가능성 대비 재시도
+        console.log("[BloggerBot] 입력창을 찾지 못해 섹션 재클릭 시도...");
+        await header.click({ force: true });
+        await this.page.waitForTimeout(2000);
+        for (const sel of inputSelectors) {
+          const el = this.page.locator(sel).first();
+          if (await el.isVisible({ timeout: 3000 }).catch(() => false)) {
+            input = el;
+            break;
+          }
+        }
+      }
+
+      if (!input) {
+         console.warn("[BloggerBot] 라벨 입력창을 끝내 찾을 수 없습니다.");
+         await this.page.screenshot({ path: path.join(process.cwd(), 'output', 'playwright', 'label_input_fail.png') });
+         return;
+      }
       
-      // 3. 기존 내용 지우고 입력
-      await input.focus();
+      // 3. 입력
+      await input.click({ force: true });
+      await this.page.waitForTimeout(500);
+      
+      // 기존 내용 삭제
       await this.page.keyboard.down("Control");
       await this.page.keyboard.press("a");
       await this.page.keyboard.up("Control");
       await this.page.keyboard.press("Backspace");
       await this.page.waitForTimeout(500);
 
-      // type을 사용하여 이벤트 트리거 유도
-      await this.page.keyboard.type(labels.join(", "), { delay: 50 });
-      await this.page.keyboard.press("Enter");
-      await this.page.waitForTimeout(1500);
+      const labelStr = labels.join(", ");
+      // fill 대신 slow type 사용하여 이벤트 트리거 유도
+      await input.type(labelStr, { delay: 50 });
+      await this.page.waitForTimeout(1000);
       
-      console.log(`[BloggerBot] 라벨 입력 완료: ${labels.join(", ")}`);
+      // Enter를 눌러야 라벨이 확정됨
+      await this.page.keyboard.press("Enter");
+      await this.page.waitForTimeout(1000);
+
+      // 마지막으로 입력창 밖을 클릭하여 포커스 해제 (변경사항 확실히 반영)
+      await header.click({ force: true });
+      await this.page.waitForTimeout(1000);
+      
+      console.log(`[BloggerBot] 라벨 입력 완료 및 확정: ${labelStr}`);
     } catch (e: any) {
-      console.warn("[BloggerBot] 라벨 입력 실패:", e.message);
+      console.warn("[BloggerBot] 라벨 입력 프로세스 중 오류:", e.message);
     }
   }
 
