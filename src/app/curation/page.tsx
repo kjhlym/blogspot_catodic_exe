@@ -96,10 +96,12 @@ export default function CurationPage() {
   const currentGroupSelectedCount = selectableItems.filter((item) => item.selected).length;
 
   const globalSelectedCount = Object.values(featuredCacheRef.current).reduce((acc, payload) => {
+    if (payload.group.domain !== activeDomain) return acc;
     return acc + payload.items.filter(item => item.selected && !item.publishStatus).length;
   }, 0);
 
   const globalSelectableCount = Object.values(featuredCacheRef.current).reduce((acc, payload) => {
+    if (payload.group.domain !== activeDomain) return acc;
     return acc + payload.items.filter(item => !item.publishStatus).length;
   }, 0);
 
@@ -171,14 +173,12 @@ export default function CurationPage() {
     const cached = featuredCacheRef.current[groupId];
     if (!cached) return;
     
-    // 현재 선택된 그룹의 도메인으로 domain 자동 동기화 
-    if (cached.group.domain !== activeDomain) {
-      setActiveDomain(cached.group.domain);
-    }
+    // 현재 선택된 그룹의 도메인으로 활성 도메인 변경
+    setActiveDomain(cached.group.domain);
     
     setFeaturedMeta(cached.group);
     setFeaturedItems([...cached.items]);
-  }, [activeDomain]);
+  }, []);
 
   const loadPresetGroup = useCallback(
     async (groupId: string, options?: { forceRefresh?: boolean }) => {
@@ -188,9 +188,7 @@ export default function CurationPage() {
       const cached = featuredCacheRef.current[groupId];
       if (cached && !options?.forceRefresh) {
         // 싱크 호출 시 도메인도 같이 맞춰줌 (동기화 유실 방지)
-        if (cached.group.domain !== activeDomain) {
-          setActiveDomain(cached.group.domain);
-        }
+        setActiveDomain(cached.group.domain);
         setFeaturedMeta(cached.group);
         setFeaturedItems([...cached.items]);
         return;
@@ -216,10 +214,8 @@ export default function CurationPage() {
 
         featuredCacheRef.current[groupId] = payload;
         
-        // 새로 불러올 때도 도메인 동기화
-        if (payload.group.domain !== activeDomain) {
-          setActiveDomain(payload.group.domain);
-        }
+        // 새로 불러올 때 도메인 상태 업데이트
+        setActiveDomain(payload.group.domain);
         
         setFeaturedMeta(payload.group);
         setFeaturedItems([...payload.items]);
@@ -231,7 +227,7 @@ export default function CurationPage() {
         setFeaturedLoading(false);
       }
     },
-    [activeDomain]
+    []
   );
 
   const fetchPresetGroups = useCallback(async () => {
@@ -259,16 +255,12 @@ export default function CurationPage() {
       const groups = data.presetGroups || [];
       setPresetGroups(groups);
 
-      // 현재 도메인(또는 기본 도메인)에 맞는 첫 번째 그룹 로드
-      // loadPresetGroup 내부에서 domain 동기화를 수행하므로 
-      // 여기서는 activeDomain의 현재 상태를 읽어와서 첫 번째 그룹만 트리거합니다.
-      // activeDomain이 useMemo/useCallback 밖에서 사용되므로 dependency 경고가 뜰 수 있지만
-      // 여기서는 초기 로드 시점의 도메인을 맞추기 위함입니다.
+      // 현재 활성 도메인에 맞는 첫 번째 그룹 로드
       const firstGroupOfDomain = groups.find(g => g.domain === activeDomain);
       if (firstGroupOfDomain) {
         await loadPresetGroup(firstGroupOfDomain.id);
       } else if (groups[0]?.id) {
-        setActiveDomain(groups[0].domain); // groups[0]의 도메인으로 맞춤
+        setActiveDomain(groups[0].domain);
         await loadPresetGroup(groups[0].id);
       } else {
         setActivePresetGroupId(null);
@@ -283,7 +275,7 @@ export default function CurationPage() {
     } finally {
       setLoading(false);
     }
-  }, [loadPresetGroup]);
+  }, [loadPresetGroup, activeDomain]);
 
 
   const fetchHistory = useCallback(async () => {
@@ -394,7 +386,12 @@ export default function CurationPage() {
           statuses: Record<string, 'pending' | 'completed' | 'failed'>;
         }>(res);
         const statuses = data.statuses || {};
-        const currentHistoryLinks = new Set((latestHistory || []).map((h: { link: string }) => (h.link || '').trim()));
+        const currentHistoryLinks = new Set(
+          (latestHistory || []).map((h: any) => {
+            const link = h && typeof h.link === 'string' ? h.link : '';
+            return link.trim();
+          })
+        );
         
         let hasAnyPending = false;
         let completedAny = false;
@@ -405,8 +402,9 @@ export default function CurationPage() {
           const filteredItems = originalItems.filter((item) => {
             // 이미 pending이 아니면 그대로 유지
             if (item.publishStatus !== 'pending') return true;
-
-            const trimmedLink = item.link.trim();
+            
+            const itemLink = typeof item.link === 'string' ? item.link : '';
+            const trimmedLink = itemLink.trim();
             // 서버 상태가 completed이거나, 이미 히스토리에 존재한다면 완료된 것
             const serverStatus = statuses[trimmedLink] || statuses[item.link];
             const isFinishedInHistory = currentHistoryLinks.has(trimmedLink);
@@ -528,6 +526,7 @@ export default function CurationPage() {
   const handlePublish = async () => {
     const selectedItemsToPublish: Array<FeaturedCurationItem & { domain: string }> = [];
     for (const [_, payload] of Object.entries(featuredCacheRef.current)) {
+      if (payload.group.domain !== activeDomain) continue;
       for (const item of payload.items) {
         if (item.selected && !item.publishStatus) {
           selectedItemsToPublish.push({ ...item, domain: payload.group.domain });
@@ -680,8 +679,8 @@ export default function CurationPage() {
   const activePresetGroup = presetGroups.find((group) => group.id === activePresetGroupId) || null;
 
   return (
-    <div className='min-h-screen bg-gray-50 p-8'>
-      <main className='max-w-[1700px] mx-auto flex flex-col lg:flex-row gap-6'>
+    <div className='min-h-screen bg-gray-50 p-4 sm:p-8'>
+      <main className='max-w-6xl mx-auto flex flex-col lg:flex-row gap-6'>
         {/* 왼쪽 메인 콘텐츠 영역 */}
         <div className='flex-1 min-w-0 flex flex-col gap-6'>
         
@@ -695,16 +694,23 @@ export default function CurationPage() {
           </p>
 
           {error && (
-            <div className='bg-red-50 text-red-600 p-4 rounded-lg mb-6 flex items-center'>
+            <div className='bg-red-50 text-black font-black p-4 rounded-lg mb-6 flex items-center'>
               <span className='mr-2'>⚠️</span>
               {error}
             </div>
           )}
 
           {publishResult && (
-            <div className='bg-blue-50 text-blue-700 p-4 rounded-lg mb-6 flex items-center shadow-sm'>
+            <div className='bg-gray-100 text-black font-bold p-4 rounded-lg mb-6 flex items-center shadow-sm'>
               <span className='mr-2'>ℹ️</span>
               {publishResult}
+            </div>
+          )}
+
+          {featuredError && (
+            <div className='bg-amber-50 text-black font-bold p-4 rounded-lg mb-6 flex items-center border border-amber-200'>
+              <span className='mr-2'>⚠️</span>
+              {featuredError}
             </div>
           )}
 
@@ -715,7 +721,7 @@ export default function CurationPage() {
                   <button
                     onClick={() => void refreshActivePresetGroup()}
                     disabled={!activePresetGroupId || loading || publishing || featuredLoading}
-                    className='flex items-center px-4 py-2 bg-blue-600 border border-blue-600 rounded-lg text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-50 transition-colors'
+                    className='flex items-center px-4 py-2 bg-gray-800 text-white font-black disabled:opacity-50 transition-colors'
                   >
                     {featuredLoading ? '수집 중...' : '새 글 수집 (Crawler)'}
                   </button>
@@ -764,63 +770,42 @@ export default function CurationPage() {
                   )}
                 </div>
 
-                {/* 도메인 전환 대형 탭 */}
-                <div className='flex flex-col sm:flex-row gap-4 mb-8'>
-                  <button
-                    onClick={() => {
-                      setActiveDomain('catodic');
-                      const firstCP = presetGroups.find(g => g.domain === 'catodic');
-                      if (firstCP) loadPresetGroup(firstCP.id);
-                    }}
-                    className={`flex-1 group relative overflow-hidden p-6 rounded-2xl border-2 transition-all duration-300 hover:shadow-xl ${
-                      activeDomain === 'catodic'
-                        ? 'border-blue-600 bg-blue-50/50 ring-4 ring-blue-100'
-                        : 'border-gray-200 bg-white hover:border-blue-300'
-                    }`}
-                  >
-                    <div className='flex items-center gap-4 relative z-10'>
-                      <div className={`p-3 rounded-xl transition-colors ${
-                        activeDomain === 'catodic' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-500 group-hover:bg-blue-100 group-hover:text-blue-600'
-                      }`}>
-                        <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
-                        </svg>
-                      </div>
-                      <div className='text-left'>
-                        <h3 className={`text-xl font-black ${activeDomain === 'catodic' ? 'text-blue-900' : 'text-gray-700'}`}>전기방식</h3>
-                        <p className={`text-sm ${activeDomain === 'catodic' ? 'text-blue-600' : 'text-gray-400'}`}>Technical Cathodic Protection</p>
-                      </div>
-                    </div>
-                    {activeDomain === 'catodic' && <div className='absolute bottom-0 left-0 h-1.5 w-full bg-blue-600' />}
-                  </button>
+                {/* 도메인 전환 상호 배타적 버튼 UI */}
+                <div className='flex items-center gap-4 mb-8 p-4 bg-gray-50 rounded-2xl border border-gray-200'>
+                  <span className="text-sm font-black text-black shrink-0">도메인 선택:</span>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => {
+                        setActiveDomain('catodic');
+                        const first = presetGroups.find(g => g.domain === 'catodic');
+                        if (first) loadPresetGroup(first.id);
+                      }}
+                      className={`px-6 py-3 rounded-xl border-2 transition-all flex flex-col items-center gap-1 min-w-[140px] ${
+                        activeDomain === 'catodic'
+                          ? 'bg-gray-800 border-gray-800 shadow-md'
+                          : 'bg-white border-gray-200 hover:border-gray-300'
+                      }`}
+                    >
+                      <span className={`text-lg font-black ${activeDomain === 'catodic' ? 'text-white' : 'text-black'}`}>전기방식</span>
+                      <span className={`text-xs font-bold ${activeDomain === 'catodic' ? 'text-gray-300' : 'text-black'}`}>Technical CP</span>
+                    </button>
 
-                  <button
-                    onClick={() => {
-                      setActiveDomain('lifeculture');
-                      const firstLife = presetGroups.find(g => g.domain === 'lifeculture');
-                      if (firstLife) loadPresetGroup(firstLife.id);
-                    }}
-                    className={`flex-1 group relative overflow-hidden p-6 rounded-2xl border-2 transition-all duration-300 hover:shadow-xl ${
-                      activeDomain === 'lifeculture'
-                        ? 'border-purple-600 bg-purple-50/50 ring-4 ring-purple-100'
-                        : 'border-gray-200 bg-white hover:border-purple-300'
-                    }`}
-                  >
-                    <div className='flex items-center gap-4 relative z-10'>
-                      <div className={`p-3 rounded-xl transition-colors ${
-                        activeDomain === 'lifeculture' ? 'bg-purple-600 text-white' : 'bg-gray-100 text-gray-500 group-hover:bg-purple-100 group-hover:text-purple-600'
-                      }`}>
-                        <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
-                        </svg>
-                      </div>
-                      <div className='text-left'>
-                        <h3 className={`text-xl font-black ${activeDomain === 'lifeculture' ? 'text-purple-900' : 'text-gray-700'}`}>생활문화</h3>
-                        <p className={`text-sm ${activeDomain === 'lifeculture' ? 'text-purple-600' : 'text-gray-400'}`}>Depth Life & Culture Insight</p>
-                      </div>
-                    </div>
-                    {activeDomain === 'lifeculture' && <div className='absolute bottom-0 left-0 h-1.5 w-full bg-purple-600' />}
-                  </button>
+                    <button
+                      onClick={() => {
+                        setActiveDomain('lifeculture');
+                        const first = presetGroups.find(g => g.domain === 'lifeculture');
+                        if (first) loadPresetGroup(first.id);
+                      }}
+                      className={`px-6 py-3 rounded-xl border-2 transition-all flex flex-col items-center gap-1 min-w-[140px] ${
+                        activeDomain === 'lifeculture'
+                          ? 'bg-gray-800 border-gray-800 shadow-md'
+                          : 'bg-white border-gray-200 hover:border-gray-300'
+                      }`}
+                    >
+                      <span className={`text-lg font-black ${activeDomain === 'lifeculture' ? 'text-white' : 'text-black'}`}>생활문화</span>
+                      <span className={`text-xs font-bold ${activeDomain === 'lifeculture' ? 'text-gray-300' : 'text-black'}`}>Life & Culture</span>
+                    </button>
+                  </div>
                 </div>
 
                 <div className='flex flex-wrap gap-2'>
@@ -831,12 +816,10 @@ export default function CurationPage() {
                         key={group.id}
                         onClick={() => void loadPresetGroup(group.id)}
                         disabled={featuredLoading && isActive}
-                        className={`rounded-full border px-4 py-2 text-sm font-semibold transition-all ${
+                        className={`rounded-full border px-4 py-2 text-sm font-black transition-all ${
                           isActive
-                            ? activeDomain === 'catodic' 
-                              ? 'border-blue-600 bg-blue-600 text-white shadow-sm'
-                              : 'border-purple-600 bg-purple-600 text-white shadow-sm'
-                            : 'border-gray-300 bg-white text-gray-700 hover:border-blue-300 hover:bg-blue-50'
+                            ? 'border-gray-800 bg-gray-800 text-white shadow-sm'
+                            : 'border-gray-300 bg-white text-black hover:border-gray-400 hover:bg-gray-100'
                         }`}
                       >
                         {group.label}
@@ -879,18 +862,18 @@ export default function CurationPage() {
                   <div className='flex flex-wrap items-center gap-2'>
                     <h2 className='text-lg font-bold text-gray-900'>{activePresetGroup?.label || '글감'} 탐색</h2>
                     {activePresetGroup && (
-                      <span className='inline-flex rounded-full border border-gray-300 bg-white px-3 py-1 text-xs font-bold text-gray-600'>
+                      <span className='inline-flex rounded-full border border-gray-400 bg-white px-3 py-1 text-xs font-black text-black'>
                         {activePresetGroup.queryCount}개 키워드
                       </span>
                     )}
                   </div>
-                  <p className='mt-1 text-xs text-gray-500'>
+                  <p className='mt-1 text-sm font-bold text-black'>
                     {featuredMeta?.description || '카테고리를 선택하여 글감을 탐색하세요.'}
                   </p>
                 </div>
                 <button
                    onClick={() => setShowDetails(!showDetails)}
-                   className='text-xs font-bold text-blue-600 hover:underline'
+                   className='text-xs font-black text-gray-800 hover:underline'
                 >
                   {showDetails ? '요약 설명 숨기기' : '요약 설명 보기'}
                 </button>
@@ -899,22 +882,22 @@ export default function CurationPage() {
               <div className='overflow-x-auto'>
                 <table className='w-full min-w-[880px] border-collapse text-left'>
                   <thead>
-                    <tr className='border-b border-gray-300 bg-gray-100 text-sm font-bold text-black'>
+                    <tr className='border-b border-gray-400 bg-gray-200 text-sm font-black text-black'>
                       <th className='w-24 p-4 text-center'>
                         <div className='flex flex-col items-center gap-1'>
-                          <span className='text-[10px] text-gray-500'>ALL</span>
+                          <span className='text-xs font-black text-black'>ALL</span>
                           <input
                             ref={selectAllRef}
                             type='checkbox'
                             checked={allSelectableSelected}
                             onChange={toggleSelectAll}
                             disabled={selectableItems.length === 0 || featuredLoading}
-                            className='h-5 w-5 cursor-pointer rounded border-gray-400 text-blue-600'
+                            className='h-5 w-5 cursor-pointer rounded border-gray-500 text-gray-900 focus:ring-gray-900'
                           />
                         </div>
                       </th>
-                      <th className='w-[200px] p-4 uppercase text-xs tracking-wider text-gray-500'>Keyword</th>
-                      <th className='p-4 uppercase text-xs tracking-wider text-gray-500'>Topic / Title</th>
+                      <th className='w-[200px] p-4 uppercase text-xs tracking-wider text-black font-black'>Keyword</th>
+                      <th className='p-4 uppercase text-xs tracking-wider text-black font-black'>Topic / Title</th>
                     </tr>
                   </thead>
                   <tbody className='divide-y divide-gray-200'>
@@ -922,8 +905,8 @@ export default function CurationPage() {
                       <tr>
                         <td colSpan={3} className='p-12 text-center'>
                           <div className='flex flex-col items-center gap-3'>
-                            <div className='h-8 w-8 animate-spin rounded-full border-4 border-blue-600 border-t-transparent'></div>
-                            <span className='text-sm font-bold text-blue-600'>데이터를 갱신하고 있습니다...</span>
+                            <div className='h-8 w-8 animate-spin rounded-full border-4 border-gray-800 border-t-transparent'></div>
+                            <span className='text-sm font-black text-gray-800'>데이터를 갱신하고 있습니다...</span>
                           </div>
                         </td>
                       </tr>
@@ -945,7 +928,7 @@ export default function CurationPage() {
                           return !isCompleted && !isAlreadyPublished;
                         })
                         .map((item, index) => (
-                        <tr key={`${item.link}-${index}`} className={item.selected ? 'bg-blue-50/50' : 'bg-white hover:bg-gray-50/50'}>
+                        <tr key={`${item.link}-${index}`} className={item.selected ? 'bg-gray-100' : 'bg-white hover:bg-gray-50/50'}>
                           <td className='p-4 text-center'>
                             <div className='flex flex-col items-center gap-1'>
                               {item.publishStatus === 'pending' ? (
@@ -959,7 +942,7 @@ export default function CurationPage() {
                                   type='checkbox'
                                   checked={item.selected}
                                   onChange={() => toggleSelect(item.link)}
-                                  className='h-6 w-6 cursor-pointer rounded border-gray-300 text-blue-600 focus:ring-blue-500'
+                                  className='h-6 w-6 cursor-pointer rounded border-gray-300 focus:ring-offset-0 text-gray-900 focus:ring-gray-900'
                                 />
                               )}
                             </div>
@@ -1025,7 +1008,7 @@ export default function CurationPage() {
         </div>
 
         {/* 오른쪽 사이드바: 발행 히스토리 */}
-        <aside className='w-full lg:w-64 shrink-0'>
+        <aside className='w-full lg:w-56 shrink-0'>
           <div className='bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden sticky top-6'>
             <div className='p-3 border-b border-gray-100 flex items-center justify-between bg-gray-50/50'>
               <h2 className='font-bold text-gray-800 flex items-center gap-1 text-sm'>
@@ -1035,14 +1018,14 @@ export default function CurationPage() {
                 <button 
                   onClick={() => void syncHistory()}
                   disabled={isSyncing}
-                  className={`text-xs px-2 py-1 rounded border border-blue-200 bg-blue-50 text-blue-600 font-bold hover:bg-blue-100 transition-all ${isSyncing ? 'animate-pulse opacity-50' : ''}`}
+                  className={`text-xs px-2 py-1 rounded border border-blue-200 bg-blue-50 text-black font-bold hover:bg-blue-100 transition-all ${isSyncing ? 'animate-pulse opacity-50' : ''}`}
                   title="모든 블로그에서 과거 글 가져오기"
                 >
                   {isSyncing ? '🔄 동기화 중...' : '🔄 전체 동기화'}
                 </button>
                 <button 
                   onClick={() => void fetchHistory()}
-                  className='text-xs text-gray-500 font-bold hover:underline'
+                  className='text-xs text-black font-black hover:underline'
                 >
                   새로고침
                 </button>
@@ -1051,25 +1034,25 @@ export default function CurationPage() {
             
             <div className='max-h-[calc(100vh-150px)] overflow-y-auto px-1 py-1'>
               {historyLoading && historyItems.length === 0 ? (
-                <div className='p-8 text-center text-sm text-gray-400'>불러오는 중...</div>
+                <div className='p-8 text-center text-sm font-bold text-black'>불러오는 중...</div>
               ) : historyItems.length === 0 ? (
                 <div className='p-10 text-center flex flex-col items-center gap-3'>
                   <div className='text-3xl grayscale opacity-30'>📭</div>
-                  <p className='text-sm text-gray-400'>아직 발행 기록이 없습니다.</p>
+                  <p className='text-sm font-bold text-black'>아직 발행 기록이 없습니다.</p>
                 </div>
               ) : (
-                <ul className='divide-y divide-gray-50'>
-                  {historyItems.slice(0, 12).map((item, idx) => (
-                    <li key={`${item.link}-${idx}`} className='p-2 hover:bg-gray-50 transition-colors border-b border-gray-50 last:border-0'>
+                <ul className='divide-y divide-gray-100'>
+                  {historyItems.slice(0, 10).map((item, idx) => (
+                    <li key={`${item.link}-${idx}`} className='p-2 hover:bg-gray-100 transition-colors border-b border-gray-100 last:border-0'>
                       <a 
                         href={item.link} 
                         target='_blank' 
                         rel='noopener noreferrer'
                         className='group block'
                       >
-                        <p className='text-[13px] font-bold text-gray-800 leading-tight group-hover:text-blue-600 transition-colors mb-1 line-clamp-2' dangerouslySetInnerHTML={{ __html: item.title }} />
+                        <p className='text-[12px] font-black text-black leading-tight group-hover:text-gray-600 transition-colors mb-1 line-clamp-2' dangerouslySetInnerHTML={{ __html: item.title }} />
                         <div className='flex items-center justify-between'>
-                          <span className='text-[10px] text-gray-400'>
+                          <span className='text-[10px] font-black text-black'>
                             {new Date(item.time).toLocaleString('ko-KR', { 
                               month: 'short', 
                               day: 'numeric', 
@@ -1077,14 +1060,13 @@ export default function CurationPage() {
                               minute: 'numeric' 
                             })}
                           </span>
-                          <span className='text-[10px] text-blue-500 font-bold opacity-0 group-hover:opacity-100 transition-opacity'>방문하기 →</span>
                         </div>
                       </a>
                     </li>
                   ))}
-                  {historyItems.length > 12 && (
-                    <li className='p-2 text-center text-[11px] text-gray-400'>
-                      + {historyItems.length - 12}개 더 있음
+                  {historyItems.length > 10 && (
+                    <li className='p-2 text-center text-[11px] font-black text-black'>
+                      + {historyItems.length - 10}개 더 있음
                     </li>
                   )}
                 </ul>
