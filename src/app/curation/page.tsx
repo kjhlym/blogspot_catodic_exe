@@ -91,6 +91,13 @@ export default function CurationPage() {
   const selectAllRef = useRef<HTMLInputElement | null>(null);
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
   const featuredCacheRef = useRef<Record<string, FeaturedCachePayload>>({});
+  const activePresetGroupIdRef = useRef<string | null>(null);
+  const initialLoadDone = useRef(false);
+
+  // activePresetGroupId 동기화용 ref
+  useEffect(() => {
+    activePresetGroupIdRef.current = activePresetGroupId;
+  }, [activePresetGroupId]);
 
   const selectableItems = featuredItems.filter((item) => !item.publishStatus);
   const currentGroupSelectedCount = selectableItems.filter((item) => item.selected).length;
@@ -234,6 +241,7 @@ export default function CurationPage() {
     setLoading(true);
     setError(null);
     setFeaturedError(null);
+    // 캐시 초기화는 전체 리프레시 때만 수행
     featuredCacheRef.current = {};
 
     try {
@@ -252,21 +260,7 @@ export default function CurationPage() {
         throw new Error(data.error || '추천 카테고리를 불러오는데 실패했습니다.');
       }
 
-      const groups = data.presetGroups || [];
-      setPresetGroups(groups);
-
-      // 현재 활성 도메인에 맞는 첫 번째 그룹 로드
-      const firstGroupOfDomain = groups.find(g => g.domain === activeDomain);
-      if (firstGroupOfDomain) {
-        await loadPresetGroup(firstGroupOfDomain.id);
-      } else if (groups[0]?.id) {
-        setActiveDomain(groups[0].domain);
-        await loadPresetGroup(groups[0].id);
-      } else {
-        setActivePresetGroupId(null);
-        setFeaturedMeta(null);
-        setFeaturedItems([]);
-      }
+      setPresetGroups(data.presetGroups || []);
     } catch (err: any) {
       console.error('Fetch Preset Groups Error:', err);
       const message = err.name === 'AbortError' ? '서버 응답 시간이 초과되었습니다. Redis 상태 혹은 서버 연결을 확인하세요.' : 
@@ -275,7 +269,19 @@ export default function CurationPage() {
     } finally {
       setLoading(false);
     }
-  }, [loadPresetGroup, activeDomain]);
+  }, []);
+
+  // 초기 카테고리 로드 및 도메인 전환 대응
+  useEffect(() => {
+    if (presetGroups.length === 0 || initialLoadDone.current) return;
+    
+    // 마운트 후 최초 1회만 실행
+    initialLoadDone.current = true;
+    const firstGroup = presetGroups.find(g => g.domain === activeDomain) || presetGroups[0];
+    if (firstGroup) {
+      void loadPresetGroup(firstGroup.id);
+    }
+  }, [presetGroups, activeDomain, loadPresetGroup]);
 
 
   const fetchHistory = useCallback(async () => {
@@ -286,7 +292,7 @@ export default function CurationPage() {
         const data = await readJsonSafely<HistoryItem[]>(res);
         setHistoryItems(data);
 
-        // 캐시된 데이터에서도 발행된 항목 제외 처리 (사용자 요청: 완료된 글은 삭제)
+        // 캐시된 데이터에서도 발행된 항목 제외 처리
         for (const groupId in featuredCacheRef.current) {
           const payload = featuredCacheRef.current[groupId];
           featuredCacheRef.current[groupId].items = payload.items.filter(
@@ -294,9 +300,9 @@ export default function CurationPage() {
           );
         }
 
-        // 현재 표시 중인 그룹 UI 업데이트
-        if (activePresetGroupId) {
-          syncCurrentGroup(activePresetGroupId);
+        // 현재 표시 중인 그룹 UI 업데이트 (activePresetGroupIdRef 사용)
+        if (activePresetGroupIdRef.current) {
+          syncCurrentGroup(activePresetGroupIdRef.current);
         }
       }
     } catch (err) {
@@ -304,7 +310,7 @@ export default function CurationPage() {
     } finally {
       setHistoryLoading(false);
     }
-  }, [activePresetGroupId, syncCurrentGroup]);
+  }, [syncCurrentGroup]);
 
   const syncHistory = async () => {
     if (isSyncing) return;
@@ -335,7 +341,7 @@ export default function CurationPage() {
         pollingRef.current = null;
       }
     };
-  }, [fetchPresetGroups, fetchHistory]);
+  }, []); // 마운트 시 최초 1회만 실행 (fetchPresetGroups, fetchHistory는 이미 stable함)
 
   const refreshActivePresetGroup = useCallback(async () => {
     if (!activePresetGroupId) return;
@@ -808,7 +814,7 @@ export default function CurationPage() {
                   </div>
                 </div>
 
-                <div className='flex flex-wrap gap-2'>
+                <div className='flex flex-wrap gap-2 min-h-[44px] items-center'>
                   {presetGroups.filter(g => g.domain === activeDomain).map((group) => {
                     const isActive = group.id === activePresetGroupId;
                     return (
@@ -856,7 +862,7 @@ export default function CurationPage() {
             </div>
 
             {/* 글감 테이블 */}
-            <div className='rounded-2xl border border-gray-300 bg-white overflow-hidden'>
+            <div className='rounded-2xl border border-gray-300 bg-white overflow-hidden min-h-[500px] flex flex-col'>
               <div className='border-b border-gray-200 bg-gray-50 px-5 py-4 flex justify-between items-center'>
                 <div>
                   <div className='flex flex-wrap items-center gap-2'>
@@ -903,10 +909,10 @@ export default function CurationPage() {
                   <tbody className='divide-y divide-gray-200'>
                     {featuredLoading ? (
                       <tr>
-                        <td colSpan={3} className='p-12 text-center'>
-                          <div className='flex flex-col items-center gap-3'>
-                            <div className='h-8 w-8 animate-spin rounded-full border-4 border-gray-800 border-t-transparent'></div>
-                            <span className='text-sm font-black text-gray-800'>데이터를 갱신하고 있습니다...</span>
+                        <td colSpan={3} className='p-24 text-center'>
+                          <div className='flex flex-col items-center justify-center gap-4 min-h-[200px]'>
+                            <div className='h-12 w-12 animate-spin rounded-full border-4 border-gray-800 border-t-transparent'></div>
+                            <span className='text-lg font-black text-gray-800 italic'>데이터를 정밀하게 수집하는 중입니다...</span>
                           </div>
                         </td>
                       </tr>
