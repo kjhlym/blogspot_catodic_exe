@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "next dev",
+    "dev": "node scripts/check-redis.js && concurrently \"npm run dev:server\" \"npm run worker\" \"npm run dev:open\"",
+    "dev:server": "next dev -p 3002",
+    "dev:open": "powershell -Command \"Start-Sleep -s 10; start http://localhost:3002/curation\"",
     "dev:hidden": "powershell -WindowStyle Hidden -Command \"npm run dev\"",
     "build": "next build",
     "start": "next start",
@@ -37,6 +39,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "concurrently": "^9.2.1",
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
     "postcss-import": "^16.1.1",
