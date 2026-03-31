@@ -2,6 +2,7 @@
   "name": "bloggerspot-api-bot",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "next dev",
     "dev:hidden": "powershell -WindowStyle Hidden -Command \"npm run dev\"",
