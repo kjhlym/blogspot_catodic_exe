@@ -1,0 +1,18 @@
+[dotenv@17.3.1] injecting env (21) from .env.local -- tip: ?쨼 agentic secret storage: https://dotenvx.com/as2
+?? Starting Verification Test...
+Job Data prepared. Executing BloggerBot...
+[Job verify-job-1] [START] Blogger ?묒뾽 ?쒖옉: [寃利??뚯뒪?? 2026 ?꾧린諛⑹떇 ?곗뾽 ?몃젋??遺꾩꽍
+[Worker Error] [[寃利??뚯뒪?? 2026 ?꾧린諛⑹떇 ?곗뾽 ?몃젋??遺꾩꽍] page.waitForURL: Timeout 30000ms exceeded.
+=========================== logs ===========================
+waiting for navigation until "load"
+============================================================
+?좑툘 DISCORD_WEBHOOK_URL???ㅼ젙?섏? ?딆븯?듬땲??
+??Test Failed: page.waitForURL: Timeout 30000ms exceeded.
+=========================== logs ===========================
+waiting for navigation until "load"
+============================================================
+    at BloggerBot.openEditor (D:\rpa\blogspot_catodic_exe\src\lib\blogger.ts:304:18)
+    at async BloggerBot.execute (D:\rpa\blogspot_catodic_exe\src\lib\blogger.ts:88:7)
+    at async runTest (D:\rpa\blogspot_catodic_exe\scripts\verify_fixes.ts:31:20) {
+  name: 'TimeoutError'
+}
